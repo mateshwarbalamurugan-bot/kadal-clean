@@ -1,0 +1,16 @@
+# Clean Kadal — Floating Waste Detection Dataset Configuration
+# Standard Ultralytics YOLO format
+
+path: ../datasets
+train: images/train
+val: images/val
+test: images/test
+
+# 6 Target Object Classes for Floating Waste & Surface Debris
+names:
+  0: plastic_bottle
+  1: plastic_cup
+  2: plastic_wrapper
+  3: plastic_bag
+  4: bottle_cap
+  5: leaf
