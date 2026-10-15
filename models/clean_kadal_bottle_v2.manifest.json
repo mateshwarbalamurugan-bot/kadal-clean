@@ -21,7 +21,7 @@
     "source": "test_metrics.json recorded by CleanKadal.ipynb; not independently reproduced in this session"
   },
   "single_image_smoke_test": {
-    "source": "one raw labeled image from the supplied Flow-Img v3 test split",
+    "source": "one raw labeled image from the supplied Flow-Img v3 test split, bundled as frontend/public/sample_flowimg_v3_bottle.jpg",
     "image_size_1024": {
       "predictions": 8,
       "ground_truth_objects": 8,

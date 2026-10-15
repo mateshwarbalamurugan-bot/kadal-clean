@@ -17,6 +17,39 @@ def test_get_health():
     assert "model_loaded" in data
 
 
+def test_get_status_alias():
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+
+
+def test_production_frontend_origin_is_allowed_by_cors():
+    response = client.options(
+        "/api/analyze/frame",
+        headers={
+            "Origin": "https://clean-kadal.vercel.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://clean-kadal.vercel.app"
+
+
+def test_vercel_preview_origin_is_allowed_by_cors():
+    origin = "https://clean-kadal-git-feature-matcom1.vercel.app"
+    response = client.options(
+        "/api/analyze/frame",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
 def test_get_model_status():
     response = client.get("/api/model/status")
     assert response.status_code == 200
@@ -139,6 +172,29 @@ def test_static_image_disables_temporal_outputs():
     assert data["camera_motion"]["status"] == "unavailable"
     assert data["wave_analysis"]["reliability"] == "insufficient_data"
     assert any("Static image" in warning for warning in data["warnings"])
+
+
+def test_frame_analysis_rejects_html_data_url():
+    payload = {
+        "image_base64": "data:text/html; charset=utf-8;base64,PGh0bWw+PC9odG1sPg==",
+        "timestamp": 12345.0,
+    }
+    response = client.post("/api/analyze/frame", json=payload)
+    assert response.status_code == 400
+    assert "Only base64 data URLs" in response.json()["detail"]
+
+
+def test_frame_analysis_rejects_declared_mime_that_does_not_match_bytes():
+    image = np.zeros((32, 32, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    payload = {
+        "image_base64": "data:image/jpeg;base64," + base64.b64encode(encoded).decode("ascii"),
+        "timestamp": 12345.0,
+    }
+    response = client.post("/api/analyze/frame", json=payload)
+    assert response.status_code == 400
+    assert "does not match the image bytes" in response.json()["detail"]
 
 
 def test_tracker_reset_endpoint():

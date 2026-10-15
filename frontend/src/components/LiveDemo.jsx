@@ -1,5 +1,43 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 
+const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const SAMPLE_IMAGE_URL = '/sample_flowimg_v3_bottle.jpg';
+
+async function imageBlobToDataUrl(blob) {
+  const mimeType = blob.type.split(';', 1)[0].trim().toLowerCase();
+  if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) {
+    throw new Error(`Unsupported image type "${mimeType || 'unknown'}". Use JPEG, PNG, or WebP.`);
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => image.naturalWidth > 0 && image.naturalHeight > 0
+        ? resolve()
+        : reject(new Error('The selected file does not contain a decodable image.'));
+      image.onerror = () => reject(new Error('The selected file does not contain a decodable image.'));
+      image.src = objectUrl;
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== 'string' || !/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(dataUrl)) {
+        reject(new Error('Could not encode the image as valid base64 image data.'));
+        return;
+      }
+      resolve(dataUrl);
+    };
+    reader.onerror = () => reject(new Error('Could not read the selected image file.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export default function LiveDemo({
   analysisData,
   onAnalyzeFrame,
@@ -89,15 +127,39 @@ export default function LiveDemo({
         throw new Error('Webcam API is not supported in this browser.');
       }
 
-      const videoConstraints = {
-        width: { ideal: 640 },
-        height: { ideal: 480 },
-      };
-      if (deviceId) videoConstraints.deviceId = { exact: deviceId };
-
-      nextStream = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraints,
-      });
+      const cameraAttempts = [];
+      if (deviceId) {
+        cameraAttempts.push({
+          video: {
+            deviceId: { exact: deviceId },
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: 15 },
+          },
+          audio: false,
+        });
+        cameraAttempts.push({
+          video: { deviceId: { ideal: deviceId }, frameRate: { ideal: 15 } },
+          audio: false,
+        });
+      }
+      cameraAttempts.push(
+        { video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } }, audio: false },
+        { video: true, audio: false }
+      );
+      let lastCameraError;
+      for (const constraints of cameraAttempts) {
+        try {
+          nextStream = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
+        } catch (cameraError) {
+          lastCameraError = cameraError;
+          if (cameraError.name === 'NotAllowedError' || cameraError.name === 'PermissionDeniedError') {
+            throw cameraError;
+          }
+        }
+      }
+      if (!nextStream) throw lastCameraError || new Error('No usable camera was found.');
 
       if (videoRef.current) {
         videoRef.current.srcObject = nextStream;
@@ -121,7 +183,7 @@ export default function LiveDemo({
       let msg = 'Could not access camera.';
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         msg = 'Camera permission denied. Enable camera in site settings or try the sample image below.';
-      } else if (err.name === 'NotFoundError') {
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         msg = deviceId
           ? 'The selected camera is unavailable. Reconnect it or choose another camera.'
           : 'No camera found. Click "Try Sample Image" to see AI detection.';
@@ -181,7 +243,7 @@ export default function LiveDemo({
   }, [cameraActive, onAnalyzeFrame]);
 
   // Handle Image Upload
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -190,13 +252,13 @@ export default function LiveDemo({
     setInternalError(null);
     onClearAnalysis();
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result;
+    try {
+      const dataUrl = await imageBlobToDataUrl(file);
       setActiveImageSrc(dataUrl);
       onAnalyzeFrame(dataUrl, true);
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      setInternalError(`Could not use image: ${err.message}`);
+    }
     // Reset file input value so same file can be selected again
     e.target.value = '';
   };
@@ -209,19 +271,24 @@ export default function LiveDemo({
     onClearAnalysis();
 
     try {
-      const response = await fetch('/sample_floating_waste.jpg');
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const response = await fetch(SAMPLE_IMAGE_URL, { cache: 'no-store' });
+      if (!response.ok) {
+        throw new Error(`Sample image request returned HTTP ${response.status}.`);
+      }
+      const responseType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
+      if (!SUPPORTED_IMAGE_TYPES.has(responseType)) {
+        throw new Error(`Expected an image from ${SAMPLE_IMAGE_URL}, received "${responseType || 'unknown content type'}".`);
+      }
       const blob = await response.blob();
-      if (!blob.type.startsWith('image/')) throw new Error('The sample asset is not an image.');
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const dataUrl = event.target?.result;
-        setActiveImageSrc(dataUrl);
-        onAnalyzeFrame(dataUrl, true);
-      };
-      reader.readAsDataURL(blob);
+      if (blob.type && blob.type.split(';', 1)[0].trim().toLowerCase() !== responseType) {
+        throw new Error('The sample image response has inconsistent MIME types.');
+      }
+      const dataUrl = await imageBlobToDataUrl(blob);
+      setActiveImageSrc(dataUrl);
+      onAnalyzeFrame(dataUrl, true);
     } catch (err) {
-      setInternalError('Could not load sample image: ' + err.message);
+      setActiveImageSrc(null);
+      setInternalError(`Could not load sample image: ${err.message}`);
     }
   };
 
@@ -360,7 +427,7 @@ export default function LiveDemo({
             <input
               type="file"
               ref={fileInputRef}
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp"
               style={{ display: 'none' }}
               onChange={handleFileUpload}
             />
@@ -518,7 +585,7 @@ export default function LiveDemo({
           </div>
           <div className="footer-note">
             {isSampleMode
-              ? <>Demo-only image from <a href="https://universe.roboflow.com/small-objects-5irpk/flow-img/dataset/3" target="_blank" rel="noreferrer">Flow-Img v3</a> (CC BY 4.0); not live footage or proof of field performance.</>
+              ? <>Labeled Flow-Img v3 demo image (CC BY 4.0); not live footage or evidence of field performance. See <a href="/ATTRIBUTION.txt" target="_blank" rel="noreferrer">image attribution</a>.</>
               : 'Boxes show real model predictions. Direction and wave estimates require consecutive live frames.'}
           </div>
         </div>

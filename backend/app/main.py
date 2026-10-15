@@ -3,7 +3,9 @@ Clean Kadal — FastAPI Backend
 AI-Based Floating Waste Detection and Water-Motion Analysis Research Service
 """
 import base64
+import binascii
 import os
+import re
 import time
 from typing import Dict, Any, List
 import cv2
@@ -41,18 +43,27 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Explicit browser origins; add an exact Vercel preview origin via ALLOWED_ORIGINS when needed.
-allowed_origins = [
-    origin.strip().rstrip("/")
-    for origin in os.getenv(
-        "ALLOWED_ORIGINS",
-        "https://clean-kadal.vercel.app,http://localhost:3000,http://localhost:5173",
-    ).split(",")
-    if origin.strip()
-]
+def _configured_cors_origins() -> List[str]:
+    # ALLOWED_ORIGINS is the current name; retain CORS_ORIGINS for Render
+    # environments created by the earlier deployment blueprint.
+    configured = os.getenv("ALLOWED_ORIGINS")
+    if configured is None:
+        configured = os.getenv("CORS_ORIGINS")
+    if configured is not None:
+        return [origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()]
+    return [
+        "https://clean-kadal.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=_configured_cors_origins(),
+    allow_origin_regex=r"^https://clean-kadal(?:-[a-z0-9-]+)?\.vercel\.app$",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,6 +83,7 @@ accumulation_analyzer = AccumulationAnalyzer()
 
 
 @app.get("/health", tags=["System"])
+@app.get("/status", tags=["System"])
 def health_check() -> Dict[str, Any]:
     """Health check endpoint for Render, container orchestrators, and frontend connectivity check."""
     return {
@@ -105,6 +117,39 @@ def reset_tracker() -> Dict[str, str]:
     return {"message": "Tracker, camera motion estimator, and wave analyzer state reset successfully."}
 
 
+def _decode_frame_image(image_base64: str) -> np.ndarray:
+    """Decode raw base64 or a MIME-checked JPEG, PNG, or WebP data URL."""
+    mime_type = None
+    payload = image_base64
+    if image_base64.startswith("data:"):
+        header, separator, payload = image_base64.partition(",")
+        match = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64", header)
+        if not separator or not match:
+            raise ValueError("Only base64 data URLs with image/jpeg, image/png, or image/webp are supported")
+        mime_type = match.group(1)
+
+    try:
+        img_bytes = base64.b64decode(payload, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("Image payload is not valid base64") from exc
+    if not img_bytes:
+        raise ValueError("Image payload is empty")
+
+    if mime_type:
+        signatures = {
+            "image/jpeg": lambda data: data.startswith(b"\xff\xd8\xff"),
+            "image/png": lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
+            "image/webp": lambda data: len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP",
+        }
+        if not signatures[mime_type](img_bytes):
+            raise ValueError(f"Declared MIME type {mime_type} does not match the image bytes")
+
+    decoded = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise ValueError("cv2.imdecode returned None")
+    return decoded
+
+
 @app.post("/api/analyze/frame", response_model=FrameAnalysisResponse, tags=["Video Analysis"])
 def analyze_frame(req: FrameAnalysisRequest) -> FrameAnalysisResponse:
     """
@@ -117,18 +162,9 @@ def analyze_frame(req: FrameAnalysisRequest) -> FrameAnalysisResponse:
     """
     warnings: List[str] = []
 
-    # 1. Decode base64 image
+    # 1. Decode raw base64 or a supported, MIME-declared image data URL.
     try:
-        if "," in req.image_base64:
-            payload = req.image_base64.split(",", 1)[1]
-        else:
-            payload = req.image_base64
-
-        img_bytes = base64.b64decode(payload)
-        np_arr = np.frombuffer(img_bytes, np.uint8)
-        img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        if img_bgr is None:
-            raise ValueError("cv2.imdecode returned None")
+        img_bgr = _decode_frame_image(req.image_base64)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

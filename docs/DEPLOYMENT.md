@@ -117,6 +117,8 @@ Configure backend environment variables as needed:
 - `CLEAN_KADAL_IMAGE_SIZE`: optional inference image size; validate accuracy and latency after changing it.
 - `CLEAN_KADAL_CONFIDENCE_THRESHOLD`: optional backend default; live UI can send a per-frame threshold.
 
+The backend accepts `ALLOWED_ORIGINS` or the Render Blueprint’s `CORS_ORIGINS` setting; `ALLOWED_ORIGINS` takes precedence if both are set. Vercel Preview origins for this project are also covered by a scoped hostname pattern; add exact origins for any custom preview domain.
+
 After deployment, test `<actual-render-url>/health` and `/api/model/status`. Configure `VITE_API_BASE_URL` in Vercel using the actual Render URL only after the backend health check succeeds. Ensure the deployed model status reports the custom bottle checkpoint; otherwise the service may be using the generic COCO fallback.
 
 ## Build and tests
