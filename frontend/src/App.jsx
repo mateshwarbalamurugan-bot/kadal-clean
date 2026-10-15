@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import LiveDemo from './components/LiveDemo';
 import ResultsSection from './components/ResultsSection';
 import MovementInsights from './components/MovementInsights';
 import AdvancedAnalysis from './components/AdvancedAnalysis';
+import ArduinoControlPanel from './components/ArduinoControlPanel';
 
 import {
   checkBackendHealth,
@@ -28,6 +29,13 @@ export default function App() {
 
   // Analysis Telemetry
   const [analysisData, setAnalysisData] = useState(null);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.25);
+  const [analysisTelemetry, setAnalysisTelemetry] = useState({ latencyMs: null, inferenceFps: null, lastProcessedAt: null });
+  const [telemetryHistory, setTelemetryHistory] = useState([]);
+  const [manualWindDirection, setManualWindDirection] = useState('');
+  const frameRequestActiveRef = useRef(false);
+  const frameRequestPromiseRef = useRef(Promise.resolve());
+  const previousFrameCompletionRef = useRef(null);
 
   // Trajectory & Advanced Settings
   const [predictionHorizon, setPredictionHorizon] = useState(1.5);
@@ -59,105 +67,134 @@ export default function App() {
       }
     }
     checkHealth();
-    const interval = setInterval(checkHealth, 6000);
+    const interval = setInterval(checkHealth, 8000);
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
   }, []);
 
-  // Frame Analysis Handler (called by LiveDemo on camera frame or image upload)
+  // Frame Analysis Handler (called by LiveDemo on camera frames or still images).
+  // Never queue multiple CPU inference requests; a live frame is dropped while one is active.
   const handleAnalyzeFrame = useCallback(
     async (base64Image, isStaticImage = false) => {
+      if (!isStaticImage && frameRequestActiveRef.current) return null;
+      if (isStaticImage && frameRequestActiveRef.current) await frameRequestPromiseRef.current;
+      if (frameRequestActiveRef.current) return null;
+      frameRequestActiveRef.current = true;
+      let releaseFrameRequest;
+      frameRequestPromiseRef.current = new Promise((resolve) => { releaseFrameRequest = resolve; });
+      const startedAt = performance.now();
       const now = Date.now() / 1000.0;
 
       const payload = {
         image_base64: base64Image,
         timestamp: now,
+        is_static_image: isStaticImage,
         prediction_horizon_sec: predictionHorizon,
         prediction_method: predictionMethod,
+        confidence_threshold: confidenceThreshold,
+        manual_wind_direction: manualWindDirection || null,
       };
 
-      if (isStaticImage) {
-        setIsProcessing(true);
-      }
+      if (isStaticImage) setIsProcessing(true);
 
       try {
         const result = await sendFrameForAnalysis(payload);
+        const completedAt = performance.now();
+        const completedWallTime = Date.now();
         setAnalysisData(result);
         setErrorMessage(null);
+        const frameDeltaMs = !isStaticImage && previousFrameCompletionRef.current !== null
+          ? completedWallTime - previousFrameCompletionRef.current
+          : null;
+        setAnalysisTelemetry({
+          latencyMs: Math.round(completedAt - startedAt),
+          inferenceFps: frameDeltaMs > 0 ? Math.round((1000 / frameDeltaMs) * 10) / 10 : null,
+          lastProcessedAt: completedWallTime,
+        });
+        if (!isStaticImage) previousFrameCompletionRef.current = completedWallTime;
+        if (!isStaticImage) {
+          setTelemetryHistory((previous) => [...previous, {
+            timestamp: result.timestamp || now,
+            detectionCount: (result.detections || []).filter((detection) => detection.is_litter_candidate).length,
+            visibleTracks: (result.tracked_objects || []).length,
+            waveMagnitude: result.wave_analysis?.reliability === 'reliable' ? result.wave_analysis.magnitude : null,
+            waveReliability: result.wave_analysis?.reliability || 'insufficient_data',
+          }].slice(-120));
+        }
 
-        // Update Trajectory Evaluation loop
-        if (result.tracked_objects && result.tracked_objects.length > 0) {
+        // Update trajectory evaluation only from temporal live tracking results.
+        if (!isStaticImage && result.tracked_objects && result.tracked_objects.length > 0) {
           const updatedPending = [...pendingForecasts];
           const newEvaluations = [];
-
           result.tracked_objects.forEach((obj) => {
             for (let i = updatedPending.length - 1; i >= 0; i--) {
               const forecast = updatedPending[i];
               if (forecast.track_id === obj.track_id && now >= forecast.target_t) {
                 const dx = obj.position[0] - forecast.predicted[0];
                 const dy = obj.position[1] - forecast.predicted[1];
-                const err = Math.sqrt(dx * dx + dy * dy);
-
                 newEvaluations.push({
                   track_id: obj.track_id,
                   method: forecast.method,
                   predicted: forecast.predicted,
                   observed: obj.position,
-                  error: err,
+                  error: Math.sqrt(dx * dx + dy * dy),
                   evaluated_at: now,
                 });
                 updatedPending.splice(i, 1);
               }
             }
-
             if (obj.predicted_position && obj.prediction_reliability === 'reliable') {
-              const exists = updatedPending.some((p) => p.track_id === obj.track_id);
-              if (!exists) {
-                updatedPending.push({
-                  track_id: obj.track_id,
-                  method: predictionMethod,
-                  predicted: obj.predicted_position,
-                  target_t: now + (obj.prediction_horizon_sec || predictionHorizon),
-                });
-              }
+              const exists = updatedPending.some((forecast) => forecast.track_id === obj.track_id);
+              if (!exists) updatedPending.push({
+                track_id: obj.track_id,
+                method: predictionMethod,
+                predicted: obj.predicted_position,
+                target_t: now + (obj.prediction_horizon_sec || predictionHorizon),
+              });
             }
           });
-
           setPendingForecasts(updatedPending);
-          if (newEvaluations.length > 0) {
-            setTrajectoryEvaluations((prev) => [...prev, ...newEvaluations]);
-          }
+          if (newEvaluations.length > 0) setTrajectoryEvaluations((prev) => [...prev, ...newEvaluations]);
         }
 
-        // Record observation in active experiment
+        // Bound the in-memory experiment log; this remains local to the browser session.
         if (isRecording && currentSession) {
           setCurrentSession((prev) => ({
             ...prev,
             duration_sec: Math.round(now - prev.start_time),
-            records: [
-              ...prev.records,
-              {
-                timestamp: now,
-                tracked_objects: result.tracked_objects,
-                detections: result.detections,
-                wave_analysis: result.wave_analysis,
-                camera_motion: result.camera_motion,
-              },
-            ],
+            records: [...prev.records, {
+              timestamp: now,
+              tracked_objects: result.tracked_objects,
+              detections: result.detections,
+              wave_analysis: result.wave_analysis,
+              camera_motion: result.camera_motion,
+            }].slice(-10000),
           }));
         }
+        return result;
       } catch (err) {
         setErrorMessage(err.message);
+        return null;
       } finally {
-        if (isStaticImage) {
-          setIsProcessing(false);
-        }
+        frameRequestActiveRef.current = false;
+        releaseFrameRequest?.();
+        if (isStaticImage) setIsProcessing(false);
       }
     },
-    [predictionHorizon, predictionMethod, pendingForecasts, isRecording, currentSession]
+    [predictionHorizon, predictionMethod, confidenceThreshold, manualWindDirection, pendingForecasts, isRecording, currentSession]
   );
+
+  const handleClearAnalysis = useCallback(() => {
+    setAnalysisData(null);
+    setPendingForecasts([]);
+    setTrajectoryEvaluations([]);
+    setTelemetryHistory([]);
+    setAnalysisTelemetry({ latencyMs: null, inferenceFps: null, lastProcessedAt: null });
+    previousFrameCompletionRef.current = null;
+    setErrorMessage(null);
+  }, []);
 
   // Model Reload Handler
   const handleReloadModel = async () => {
@@ -218,6 +255,10 @@ export default function App() {
           setCameraActive={setCameraActive}
           isSampleMode={isSampleMode}
           setIsSampleMode={setIsSampleMode}
+          onClearAnalysis={handleClearAnalysis}
+          confidenceThreshold={confidenceThreshold}
+          setConfidenceThreshold={setConfidenceThreshold}
+          analysisTelemetry={analysisTelemetry}
         />
 
         {/* 4. Three Core Result Cards */}
@@ -241,10 +282,21 @@ export default function App() {
           predictionHorizon={predictionHorizon}
           setPredictionHorizon={setPredictionHorizon}
           trajectoryEvaluations={trajectoryEvaluations}
+          telemetryHistory={telemetryHistory}
+          manualWindDirection={manualWindDirection}
+          onUpdateManualWind={setManualWindDirection}
           isRecording={isRecording}
           onStartRecording={handleStartRecording}
           onStopRecording={handleStopRecording}
           currentSession={currentSession}
+        />
+
+        <ArduinoControlPanel
+          analysisData={analysisData}
+          cameraActive={cameraActive}
+          modelStatus={modelStatus}
+          confidenceThreshold={confidenceThreshold}
+          errorMessage={errorMessage}
         />
       </main>
 

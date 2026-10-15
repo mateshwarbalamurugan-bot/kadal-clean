@@ -1,0 +1,12 @@
+Demo image provenance and attribution
+
+1. sample_flowimg_v3_bottle.jpg — used by the “Try Sample Image” UI button
+   This unmodified 640x640 image is from Flow-Img version 3:
+   https://universe.roboflow.com/small-objects-5irpk/flow-img/dataset/3
+   The dataset's included README.dataset.txt states: "Provided by a Roboflow user" and "License: CC BY 4.0". Attribution: Flow-Img dataset contributor (name not supplied in the archive), Flow-Img v3, Roboflow Universe, CC BY 4.0: https://creativecommons.org/licenses/by/4.0/.
+   It is the image used in the recorded local inference smoke test; the single-image result is not a field-performance benchmark.
+
+2. sample_floating_waste.jpg — retained project image, not the default demo-button image
+   This 2560x1440 image was added to the project in Clean Kadal pull request #4:
+   https://github.com/mateshwarbalamurugan-bot/kadal-clean/pull/4
+   The pull request describes it as a real JPEG sample but does not record its original source or license. It is retained as a project asset; verify rights before redistribution outside this repository. In a local static-image test, the current bottle-only model returned zero detections, so the UI uses the labeled Flow-Img image instead. That one test is not a general accuracy assessment.

@@ -1,156 +1,149 @@
-﻿"""
-Clean Kadal -- Dataset Integrity & Class Distribution Verification Script
-Checks image/label pairs, verifies normalized bounding box format [0, 1],
-counts instances per class, and alerts if dataset is insufficient for training.
-"""
-import os
+﻿"""Audit a YOLO dataset described by an Ultralytics YAML file."""
+import argparse
+import hashlib
 import sys
 from pathlib import Path
-from collections import Counter
-import cv2
 
-CLASSES = [
-    "plastic_bottle",
-    "plastic_cup",
-    "plastic_wrapper",
-    "plastic_bag",
-    "bottle_cap",
-    "leaf"
-]
+import cv2
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
-def check_split(dataset_root: Path, split_name: str) -> dict:
-    img_dir = dataset_root / "images" / split_name
-    lbl_dir = dataset_root / "labels" / split_name
+def parse_args():
+    parser = argparse.ArgumentParser(description="Check YOLO images, labels, classes, boxes, and split leakage.")
+    parser.add_argument("--data", default=str(Path(__file__).resolve().parent / "dataset.yaml"), help="Dataset YAML")
+    return parser.parse_args()
 
-    stats = {
-        "images": 0,
-        "labels": 0,
-        "missing_labels": 0,
-        "corrupt_images": 0,
-        "corrupt_labels": 0,
-        "class_counts": Counter(),
-        "box_errors": 0
-    }
 
-    if not img_dir.exists():
-        print(f"[-] Directory not found: {img_dir}")
-        return stats
-
-    image_files = [f for f in img_dir.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS]
-    stats["images"] = len(image_files)
-
-    for img_path in image_files:
-        # Check image readability
-        img = cv2.imread(str(img_path))
-        if img is None:
-            stats["corrupt_images"] += 1
-            print(f"[!] Warning: Corrupt or unreadable image: {img_path.name}")
-            continue
-
-        lbl_path = lbl_dir / f"{img_path.stem}.txt"
-        if not lbl_path.exists():
-            stats["missing_labels"] += 1
-            continue
-
-        stats["labels"] += 1
-        try:
-            with open(lbl_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-
-            for line_no, line in enumerate(lines, 1):
-                parts = line.strip().split()
-                if not parts:
+def image_paths_for(value, root):
+    entries = value if isinstance(value, list) else [value]
+    result = []
+    for entry in entries:
+        path = Path(entry)
+        path = path if path.is_absolute() else root / path
+        if path.is_dir():
+            result.extend(item for item in path.rglob("*") if item.suffix.lower() in IMAGE_EXTENSIONS)
+        elif path.is_file() and path.suffix.lower() in {".txt", ".csv"}:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
                     continue
-                if len(parts) != 5:
-                    stats["corrupt_labels"] += 1
-                    print(f"[!] Invalid line format in {lbl_path.name}:{line_no} -> '{line.strip()}'")
-                    continue
+                image = Path(line)
+                result.append(image if image.is_absolute() else root / image)
+        elif path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+            result.append(path)
+    return sorted(set(item.resolve() for item in result))
 
-                cls_id = int(parts[0])
-                cx, cy, bw, bh = map(float, parts[1:])
 
-                if cls_id < 0 or cls_id >= len(CLASSES):
-                    stats["corrupt_labels"] += 1
-                    print(f"[!] Invalid class_id {cls_id} in {lbl_path.name}:{line_no}")
-                    continue
+def label_path_for(image_path):
+    parts = list(image_path.parts)
+    for index, part in enumerate(parts):
+        if part.lower() == "images":
+            parts[index] = "labels"
+            return Path(*parts).with_suffix(".txt")
+    return image_path.with_suffix(".txt")
 
-                if not (0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0 and 0.0 < bw <= 1.0 and 0.0 < bh <= 1.0):
-                    stats["box_errors"] += 1
-                    print(f"[!] Out-of-bounds bounding box in {lbl_path.name}:{line_no}: [{cx}, {cy}, {bw}, {bh}]")
-                    continue
 
-                stats["class_counts"][CLASSES[cls_id]] += 1
-
-        except Exception as e:
-            stats["corrupt_labels"] += 1
-            print(f"[!] Error reading label {lbl_path.name}: {e}")
-
-    return stats
+def class_names(config):
+    names = config.get("names", {})
+    if isinstance(names, list):
+        return {index: name for index, name in enumerate(names)}
+    return {int(key): value for key, value in names.items()}
 
 
 def main():
-    print("=" * 70)
-    print("Clean Kadal -- Dataset Integrity & Class Distribution Verification")
-    print("=" * 70)
+    args = parse_args()
+    yaml_path = Path(args.data).resolve()
+    if not yaml_path.is_file():
+        print(f"[!] Dataset YAML not found: {yaml_path}")
+        return 2
+    try:
+        import yaml
+        config = yaml.safe_load(yaml_path.read_text(encoding="utf-8-sig")) or {}
+    except Exception as exc:
+        print(f"[!] Could not parse dataset YAML: {exc}")
+        return 2
 
-    script_dir = Path(__file__).resolve().parent
-    dataset_root = script_dir.parent / "datasets"
+    root = Path(config.get("path") or yaml_path.parent)
+    if not root.is_absolute():
+        root = (yaml_path.parent / root).resolve()
+    names = class_names(config)
+    if not names:
+        print("[!] Dataset YAML has no class names.")
+        return 2
 
-    print(f"Dataset Root: {dataset_root.resolve()}\n")
+    print(f"Dataset YAML: {yaml_path}")
+    print(f"Dataset root: {root}")
+    print(f"Classes: {names}")
+    total_images = 0
+    errors = 0
+    split_hashes = {}
+    total_counts = {class_id: 0 for class_id in names}
 
-    splits = ["train", "val", "test"]
-    overall_images = 0
-    overall_classes = Counter()
+    for split in ("train", "val", "test"):
+        split_value = config.get(split)
+        if not split_value:
+            print(f"\n{split}: not configured")
+            continue
+        images = image_paths_for(split_value, root)
+        per_class = {class_id: 0 for class_id in names}
+        missing_labels = corrupt_images = corrupt_labels = bad_boxes = duplicates = 0
+        for image in images:
+            pixels = cv2.imread(str(image))
+            if pixels is None:
+                corrupt_images += 1
+                continue
+            digest = hashlib.sha256(image.read_bytes()).hexdigest()
+            if digest in split_hashes and split_hashes[digest] != split:
+                duplicates += 1
+            else:
+                split_hashes[digest] = split
 
-    for split in splits:
-        print(f"--- Checking Split: '{split}' ---")
-        stats = check_split(dataset_root, split)
-        overall_images += stats["images"]
-        overall_classes += stats["class_counts"]
+            label = label_path_for(image)
+            if not label.is_file():
+                missing_labels += 1
+                continue
+            try:
+                for line_number, line in enumerate(label.read_text(encoding="utf-8").splitlines(), 1):
+                    fields = line.split()
+                    if not fields:
+                        continue  # An intentionally empty label file is a valid negative image.
+                    if len(fields) != 5:
+                        corrupt_labels += 1
+                        continue
+                    class_id = int(fields[0])
+                    cx, cy, width, height = map(float, fields[1:])
+                    valid = (
+                        class_id in names and 0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0
+                        and 0.0 < width <= 1.0 and 0.0 < height <= 1.0
+                        and cx - width / 2 >= 0.0 and cx + width / 2 <= 1.0
+                        and cy - height / 2 >= 0.0 and cy + height / 2 <= 1.0
+                    )
+                    if not valid:
+                        bad_boxes += 1
+                        continue
+                    per_class[class_id] += 1
+                    total_counts[class_id] += 1
+            except (OSError, ValueError):
+                corrupt_labels += 1
 
-        print(f"  Images Found:        {stats['images']}")
-        print(f"  Annotation Files:    {stats['labels']}")
-        print(f"  Missing Labels:      {stats['missing_labels']}")
-        print(f"  Corrupt Images:      {stats['corrupt_images']}")
-        print(f"  Corrupt Label Lines: {stats['corrupt_labels']}")
-        print(f"  Out-of-Bounds Boxes: {stats['box_errors']}")
-        print("  Class Instances:")
-        if stats["class_counts"]:
-            for cls_name in CLASSES:
-                count = stats["class_counts"].get(cls_name, 0)
-                print(f"    - {cls_name:18s}: {count}")
-        else:
-            print("    (No annotations found in this split)")
-        print()
+        total_images += len(images)
+        errors += missing_labels + corrupt_images + corrupt_labels + bad_boxes + duplicates
+        print(f"\n{split}: {len(images)} images")
+        print(f"  missing label files: {missing_labels}; unreadable images: {corrupt_images}; malformed labels: {corrupt_labels}; invalid boxes/classes: {bad_boxes}; exact cross-split duplicates: {duplicates}")
+        for class_id, name in names.items():
+            print(f"  class {class_id} ({name}): {per_class[class_id]} boxes")
+        if split == "test" and not images:
+            print("  WARNING: no held-out test images; do not report validation metrics as test results.")
 
-    print("=" * 70)
-    print("DATASET SUMMARY & READINESS ASSESSMENT")
-    print("=" * 70)
-    print(f"Total Images Across All Splits: {overall_images}")
-    print("Total Annotated Instances:")
-    for cls_name in CLASSES:
-        count = overall_classes.get(cls_name, 0)
-        status_flag = "[OK]" if count >= 30 else "[LOW DATA]"
-        print(f"  {cls_name:18s}: {count:5d}  {status_flag}")
-
-    print("\nReadiness Assessment:")
-    if overall_images == 0:
-        print("[!] No images found in datasets/. Place captured boat-camera images in datasets/raw_captures,")
-        print("    annotate with CVAT/Roboflow/LabelImg, and run split_dataset.py before training.")
+    print(f"\nTotal images: {total_images}")
+    print("Total boxes: " + ", ".join(f"{names[k]}={v}" for k, v in total_counts.items()))
+    if errors:
+        print("[!] Dataset audit found issues. Fix them before training.")
         return 1
-    elif overall_images < 50:
-        print(f"[!] Warning: Dataset contains only {overall_images} images. Model training is technically possible")
-        print("    but generalization will be weak (< 50 images). Recommend collecting at least 100-200 frames.")
-        return 0
-    else:
-        print(f"[OK] Dataset contains {overall_images} images. Ready for transfer learning fine-tuning.")
-        return 0
+    print("[OK] No missing labels, unreadable images, invalid boxes, or exact cross-split duplicates found.")
+    return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

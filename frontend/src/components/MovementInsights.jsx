@@ -9,7 +9,7 @@ export default function MovementInsights({ analysisData }) {
       <div className="section-header">
         <h2 className="section-title">Movement & Wave Insights</h2>
         <p className="section-subtitle">
-          How Clean Kadal analyzes physical water motion and floating debris kinematics.
+          Optical estimates from the camera view; directions are relative to the frame, not compass bearings.
         </p>
       </div>
 
@@ -21,7 +21,7 @@ export default function MovementInsights({ analysisData }) {
             <h3>Object Tracking</h3>
           </div>
           <p className="insight-text">
-            Follows detected waste across consecutive video frames, calculating image-space speed and maintaining consistent identities.
+            Associates likely litter detections across consecutive frames and estimates image-space motion. Track IDs are approximate, not guaranteed identities.
           </p>
           <div className="insight-metric">
             Status: <strong>{trackedCount > 0 ? `${trackedCount} Active Track(s)` : 'Awaiting Objects'}</strong>
@@ -35,10 +35,10 @@ export default function MovementInsights({ analysisData }) {
             <h3>Wave Analysis</h3>
           </div>
           <p className="insight-text">
-            Examines visible water-surface ripples using optical flow independently from floating waste items, while factoring out camera shake.
+            Estimates visible surface-pattern motion from consecutive frames. Camera compensation can be uncertain under glare, reflections, or camera shake.
           </p>
           <div className="insight-metric">
-            Dominant Wave: <strong>{waveData?.dominant_direction_deg !== null && waveData?.dominant_direction_deg !== undefined ? `${waveData.dominant_direction_deg.toFixed(0)}°` : 'Calm / Smooth'}</strong>
+            Dominant image-space direction: <strong>{waveData?.dominant_direction_deg !== null && waveData?.dominant_direction_deg !== undefined ? `${waveData.dominant_direction_deg.toFixed(0)}°` : 'No estimate'}</strong>
           </div>
         </div>
 
@@ -63,7 +63,7 @@ export default function MovementInsights({ analysisData }) {
             <h3>Accumulation Analysis</h3>
           </div>
           <p className="insight-text">
-            Monitors dwell times across spatial zones to identify tub corners, shorelines, or containment barriers where debris clusters.
+            Summarizes observed dwell time in a normalized image grid; it does not identify real shorelines or physical barriers.
           </p>
           <div className="insight-metric">
             Threshold: <strong>≥ 5.0s Dwell Time</strong>
@@ -72,7 +72,7 @@ export default function MovementInsights({ analysisData }) {
       </div>
 
       <div className="insights-disclaimer">
-        <strong>Scientific Notice:</strong> Trajectory predictions represent short-term kinematic estimations based on surface observations. They are not guaranteed ocean-drift outcomes.
+        <strong>Scientific notice:</strong> Direction, speed, and drift forecasts are image-space estimates. They do not provide compass bearing, physical distance, current speed, or guaranteed ocean-drift outcomes.
       </div>
     </section>
   );

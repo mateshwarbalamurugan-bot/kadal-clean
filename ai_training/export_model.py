@@ -1,104 +1,60 @@
-﻿"""
-Clean Kadal -- Model Export and Verification Script
-Exports trained PyTorch model (.pt) to ONNX format, and verifies the exported
-artifact by running actual test inference before declaring export successful.
-"""
-import sys
+﻿"""Export a selected YOLO checkpoint and run a real-image inference smoke test."""
 import argparse
+import shutil
+import sys
 from pathlib import Path
-import numpy as np
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Export Clean Kadal model to ONNX.")
-    parser.add_argument(
-        "--weights",
-        type=str,
-        default=str(Path(__file__).parent.parent / "models" / "custom_best.pt"),
-        help="Path to trained PyTorch weights (default: models/custom_best.pt)"
-    )
-    parser.add_argument(
-        "--format",
-        type=str,
-        default="onnx",
-        choices=["onnx", "torchscript"],
-        help="Export format (default: onnx)"
-    )
-    parser.add_argument(
-        "--imgsz",
-        type=int,
-        default=640,
-        help="Input image size (default: 640)"
-    )
+    root = Path(__file__).resolve().parent.parent
+    parser = argparse.ArgumentParser(description="Export a Clean Kadal checkpoint to ONNX or TorchScript.")
+    parser.add_argument("--weights", default=str(root / "models" / "clean_kadal_bottle_v2.pt"), help="Source checkpoint")
+    parser.add_argument("--format", choices=("onnx", "torchscript"), default="onnx", help="Export format")
+    parser.add_argument("--imgsz", type=int, default=1024, help="Export/inference image size")
+    parser.add_argument("--test-image", default=str(root / "frontend" / "public" / "sample_floating_waste.jpg"), help="Real image for exported-model smoke test")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    print("=" * 70)
-    print("Clean Kadal -- Model Export & Verification Pipeline")
-    print("=" * 70)
-    print(f"Source weights: {args.weights}")
-    print(f"Export format:  {args.format}")
-    print(f"Image size:     {args.imgsz}")
-    print("=" * 70)
-
-    weights_path = Path(args.weights).resolve()
-    if not weights_path.exists():
-        print(f"[!] Error: Model file not found at: {weights_path}")
-        print("    Train the model first using: python ai_training/train.py")
-        sys.exit(1)
+    weights = Path(args.weights).resolve()
+    test_image = Path(args.test_image).resolve()
+    if not weights.is_file():
+        print(f"[!] Model checkpoint not found: {weights}")
+        return 2
+    if not test_image.is_file():
+        print(f"[!] Test image not found: {test_image}; pass --test-image with a real image.")
+        return 2
 
     try:
         from ultralytics import YOLO
+        model = YOLO(str(weights))
+        exported_path = Path(model.export(format=args.format, imgsz=args.imgsz, opset=12, simplify=False))
     except ImportError:
-        print("[!] Ultralytics library not found in Python environment.")
-        sys.exit(1)
+        print("[!] Ultralytics is missing. Install backend/requirements.txt first.")
+        return 2
+    except Exception as exc:
+        print(f"[!] Export failed: {exc}")
+        return 1
 
-    print("[1/3] Loading PyTorch model...")
-    model = YOLO(str(weights_path))
-
-    print(f"[2/3] Exporting to {args.format.upper()}...")
-    try:
-        exported_path_str = model.export(
-            format=args.format,
-            imgsz=args.imgsz,
-            opset=12,
-            simplify=False
-        )
-        exported_path = Path(exported_path_str)
-        print(f"[OK] Model exported to: {exported_path}")
-    except Exception as e:
-        print(f"[!] Export failed: {e}")
-        sys.exit(1)
-
-    # Copy to models/ directory if not already there
-    target_models_dir = Path(__file__).parent.parent / "models"
-    target_models_dir.mkdir(parents=True, exist_ok=True)
-    final_dest = target_models_dir / exported_path.name
+    models_dir = Path(__file__).resolve().parent.parent / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    final_dest = models_dir / exported_path.name
     if exported_path.resolve() != final_dest.resolve():
-        import shutil
         shutil.copy2(exported_path, final_dest)
-        print(f"[OK] Copied to application models folder: {final_dest}")
 
-    # Step 3: VERIFICATION - Run real test inference on exported model
-    print("[3/3] Verifying exported model with real test inference...")
     try:
-        verification_model = YOLO(str(final_dest))
-        # Create a blank test image (640x640x3)
-        dummy_img = np.zeros((args.imgsz, args.imgsz, 3), dtype=np.uint8)
-        results = verification_model.predict(dummy_img, verbose=False)
-        print("[OK] Verification successful: Exported model executed inference without errors.")
-        print(f"[OK] Model ready for deployment at: {final_dest}")
-    except Exception as e:
-        print(f"[!] Verification warning/error: {e}")
-        print("    The model was exported, but verification inference failed.")
-        sys.exit(1)
-
-    print("=" * 70)
+        exported_model = YOLO(str(final_dest))
+        results = exported_model.predict(source=str(test_image), imgsz=args.imgsz, verbose=False)
+    except Exception as exc:
+        print(f"[!] Exported model was created but inference verification failed: {exc}")
+        return 1
+    count = len(results[0].boxes) if results else 0
+    print(f"[OK] Exported artifact: {final_dest}")
+    print(f"[OK] Real-image smoke test: {test_image.name}; predictions={count}; imgsz={args.imgsz}")
+    print("This is an execution smoke test only; compare metrics on a held-out test split before deployment.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-
-
+    sys.exit(main())

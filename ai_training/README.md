@@ -1,124 +1,98 @@
-# Clean Kadal — AI Model Training & Dataset Pipeline
+# Clean Kadal model training
 
-This directory contains the complete pipeline for training, validating, and exporting a custom lightweight computer vision detector for floating waste and debris.
+The recovered production checkpoint is a **single-class `bottle` detector**. The repository does not contain model weights or your captured training images. The `.pt` checkpoint is distributed separately and is ignored by Git. See [`models/README.md`](../models/README.md) for its exact hash and baseline metrics.
 
----
+## 1. Set up the Windows environment
 
-## 1. Target Object Categories
+Open PowerShell in the project folder on D:, for example:
 
-The model is trained on 6 specific physical classes:
-
-| Class ID | Class Name | Description | Status in Interface |
-|---|---|---|---|
-| `0` | `plastic_bottle` | PET water/soft-drink bottles | Potential litter candidate |
-| `1` | `plastic_cup` | Disposable plastic or styrofoam cups | Potential litter candidate |
-| `2` | `plastic_wrapper` | Food snack wrappers, cellophane | Potential litter candidate |
-| `3` | `plastic_bag` | Thin polythene carry bags | Potential litter candidate |
-| `4` | `bottle_cap` | Small plastic caps | Potential litter candidate |
-| `5` | `leaf` | Natural plant leaves, organic surface debris | Natural debris (non-litter) |
-
-> **Important Distinction**: In the baseline (unfine-tuned) YOLOv8n-COCO detector, only generic `bottle` and `cup` classes exist. Clean Kadal **never** pretends a generic model is the custom Clean Kadal model. When running the baseline, labels are shown as `bottle` or `cup` and flagged as "potential litter candidate". Only after fine-tuning this custom pipeline will the specific classes above be recognized.
-
----
-
-## 2. Dataset Collection Workflow (From Your Boat-Mounted Camera)
-
-1. Mount your USB webcam onto your stationary boat model in the rectangular water tub.
-2. Angle the camera looking **forward and downward** toward the water surface ahead of the boat.
-3. Record distinct video clips (sessions) under different lighting conditions and with manual waves generated from different sides of the tub:
-   - `session_01_morning_flat_water.mp4`
-   - `session_02_morning_hand_waves_left.mp4`
-   - `session_03_afternoon_hand_waves_right.mp4`
-   - `session_04_shaded_mixed_waste.mp4`
-4. Extract frames at ~1 frame per second (avoid extracting 30 identical frames per second):
-   ```powershell
-   # Using ffmpeg or OpenCV
-   ffmpeg -i session_01.mp4 -r 1 datasets/raw_captures/session1_frame_%04d.jpg
-   ```
-5. Place all captured frames inside `datasets/raw_captures/`.
-
----
-
-## 3. Image Annotation
-
-Use open-source annotation tools:
-- **CVAT** (Computer Vision Annotation Tool, local or web)
-- **LabelImg** (standalone local tool: `pip install labelImg`)
-- **Roboflow** (web interface, export as YOLOv8 PyTorch format)
-
-Ensure classes match the exact 0-5 indices:
-- Format: `class_id x_center y_center width height` (all normalized between 0.0 and 1.0).
-
----
-
-## 4. Preventing Data Leakage Across Splits
-
-Consecutive video frames from the same recording session look nearly identical. If frame 12 is in training and frame 13 is in testing, test metrics will be artificially inflated and invalid.
-
-Use our session-aware splitter:
 ```powershell
-.\venv\Scripts\python.exe ai_training/split_dataset.py
+cd D:\CleanKadal\backend
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-This script assigns whole recording sessions (e.g. Session 1 & 2 to `train`, Session 3 to `val`, Session 4 to `test`), ensuring real-world test evaluation.
 
----
+If PowerShell blocks environment activation, call `D:\CleanKadal\backend\.venv\Scripts\python.exe` directly. Place the separately provisioned checkpoint here:
 
-## 5. Dataset Verification
+```text
+D:\CleanKadal\models\clean_kadal_bottle_v2.pt
+```
 
-Run the dataset integrity checker:
+Check the file against the SHA-256 in `models/README.md` before training.
+
+## 2. Capture and label local images
+
+Store images from **separate capture sessions** in separate folders, such as:
+
+```text
+D:\CleanKadal\datasets\raw_captures\session_01\frame_0001.jpg
+D:\CleanKadal\datasets\raw_captures\session_01\frame_0001.txt
+D:\CleanKadal\datasets\raw_captures\session_02\...
+D:\CleanKadal\datasets\raw_captures\session_03\...
+```
+
+Use CVAT, LabelImg, or Roboflow to export YOLO detection labels. Each `.txt` row must be `class_id x_center y_center width height`, normalized from 0 to 1. The default local YAML has only class ID `0: bottle`. Do not label bags, foam, vegetation, glare, reflections, shoreline objects, or other broad “floating waste” as bottles. For a target-free frame, create an intentional empty `.txt` file; do not leave the label missing. Capture at least three distinct sessions/days/viewpoints so train, validation, and test can be separated without putting neighboring frames from one video into different splits.
+
+Split by session, then audit the result:
+
 ```powershell
-.\venv\Scripts\python.exe ai_training/check_dataset.py
+cd D:\CleanKadal
+.\backend\.venv\Scripts\python.exe ai_training\split_dataset.py
+.\backend\.venv\Scripts\python.exe ai_training\check_dataset.py
 ```
-This script checks:
-- Image readability (corrupted files).
-- Missing annotation `.txt` files.
-- Out-of-bounds coordinates ($<0$ or $>1$).
-- Class instance balance.
-- Emits an alert if dataset has fewer than 50 images.
 
----
+The splitter writes to `datasets\local-split\` and refuses to split fewer than three sessions. It refuses to replace a non-empty output directory unless you explicitly pass `--overwrite`; use that only if you intend to discard the generated split and recreate it.
 
-## 6. Training (Transfer Learning)
+## 3. Fine-tune a candidate checkpoint
 
-Fine-tune the lightweight YOLOv8 nano model starting from pretrained weights:
+The default YAML is `ai_training\dataset.yaml`; it points to the session-separated local data. On a supported NVIDIA GPU:
+
 ```powershell
-.\venv\Scripts\python.exe ai_training/train.py --epochs 50 --batch 16 --imgsz 640 --device cpu
+.\backend\.venv\Scripts\python.exe ai_training\train.py --epochs 50 --batch 8 --imgsz 1024 --device 0
 ```
-*(If you have an NVIDIA GPU, pass `--device 0`).*
 
-When training completes:
-- Training metrics and confusion matrices are saved to `ai_training/runs/clean_kadal_custom/`.
-- The best checkpoint is automatically copied to `models/custom_best.pt`.
+On CPU (much slower):
 
----
-
-## 7. Model Validation
-
-Evaluate the trained model on unseen test sessions:
 ```powershell
-.\venv\Scripts\python.exe ai_training/validate.py
+.\backend\.venv\Scripts\python.exe ai_training\train.py --epochs 50 --batch 2 --imgsz 640 --device cpu
 ```
-Reports overall and per-class Precision, Recall, mAP@50, and mAP@50:95.
 
----
+The training script checks that the YAML and train/validation images exist. It starts from `models\clean_kadal_bottle_v2.pt` and writes the best candidate to `models\clean_kadal_bottle_candidate.pt`. It does not replace the baseline checkpoint. Training takes substantial time; use a local GPU or Colab for a competition deadline and keep the project’s held-out test data out of training.
 
-## 8. Exporting for Deployment
+To use a separate Ultralytics dataset YAML, pass it explicitly:
 
-Export the trained model to ONNX:
 ```powershell
-.\venv\Scripts\python.exe ai_training/export_model.py
+.\backend\.venv\Scripts\python.exe ai_training\check_dataset.py --data D:\CleanKadal\datasets\flow-img-v3\data.yaml
+.\backend\.venv\Scripts\python.exe ai_training\train.py --data D:\CleanKadal\datasets\flow-img-v3\data.yaml --weights D:\CleanKadal\models\clean_kadal_bottle_v2.pt --device 0
 ```
-The script:
-1. Converts `custom_best.pt` to ONNX format.
-2. Places `custom_best.onnx` into `models/`.
-3. **Runs actual test inference** to verify the exported file works before confirming success.
 
----
+Check class names and class-ID ordering in that dataset YAML before training. The supplied Flow-Img v3 model was already trained on its original data, so a meaningful improvement experiment should include new local camera examples. Do not merge broad classes from another dataset into the `bottle` class without relabeling.
 
-## 9. Reloading in Clean Kadal Application
+## 4. Compare baseline and candidate on the same held-out test split
 
-Once `models/custom_best.pt` or `models/custom_best.onnx` exists:
-- Clean Kadal backend automatically loads it on startup.
-- If the backend is already running, click **"Reload Model"** in the web dashboard or make a request to `POST /api/model/reload`.
-- The interface will immediately switch status to:
-  **"Clean Kadal Custom Detector (Custom-Trained Model Active)"** and display the 6 floating-waste classes.
+Run the audit first. Then compare both checkpoints with the **same** data YAML, test split, image size, and device:
+
+```powershell
+.\backend\.venv\Scripts\python.exe ai_training\validate.py --weights models\clean_kadal_bottle_v2.pt --data ai_training\dataset.yaml --split test --imgsz 1024 --device 0
+.\backend\.venv\Scripts\python.exe ai_training\validate.py --weights models\clean_kadal_bottle_candidate.pt --data ai_training\dataset.yaml --split test --imgsz 1024 --device 0
+```
+
+Record precision, recall, mAP@0.50, and mAP@0.50:0.95. Review false positives on target-free water and difficult cases, not only aggregate mAP. Do not deploy a candidate merely because training completed. Keep the baseline if the candidate does not improve local held-out behavior.
+
+## 5. Optional model export
+
+After selecting a candidate, export and run an image inference smoke test:
+
+```powershell
+.\backend\.venv\Scripts\python.exe ai_training\export_model.py --weights models\clean_kadal_bottle_candidate.pt --format onnx --imgsz 1024
+```
+
+This creates an ONNX artifact and executes inference on the bundled sample image. That verifies the export can run; it is not a metric comparison. The backend currently uses PyTorch weights unless its model loader is explicitly configured for the exported format.
+
+## Important limits
+
+- The current detector recognizes **bottles only**. The COCO fallback is generic and is not water-trained.
+- The notebook’s recorded 799-image results are the current documented benchmark. The one-image smoke-test result in `models/README.md` is only a sanity check.
+- A model trained in a small test tank may not generalize to open water. Keep site/session-separated local test images and report their results separately.
+- Dataset licenses differ. See [`docs/DATASET_EVALUATION.md`](../docs/DATASET_EVALUATION.md) before downloading, training on, or redistributing third-party data.

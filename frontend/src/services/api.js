@@ -5,11 +5,20 @@
  */
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
-const API_BASE = (configuredApiBase || (import.meta.env.DEV ? 'http://localhost:8000' : ''))
-  .replace(/\/+$/, '');
+const API_BASE = configuredApiBase.replace(/\/+$/, '');
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 function apiUrl(path) {
-  if (!API_BASE) {
+  if (!API_BASE && !import.meta.env.DEV) {
     throw new Error(
       'Backend URL is not configured. Set VITE_API_BASE_URL in Vercel to the public HTTPS URL of your deployed backend, then redeploy.'
     );
@@ -19,21 +28,21 @@ function apiUrl(path) {
 
 export async function checkBackendHealth() {
   try {
-    const res = await fetch(apiUrl('/health'), {
+    const res = await fetchWithTimeout(apiUrl('/health'), {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
-    });
+    }, 8000);
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     return await res.json();
   } catch (err) {
     if (err.message?.includes('VITE_API_BASE_URL')) throw err;
-    throw new Error(`Backend unavailable at ${API_BASE}. Ensure the Python backend is running.`);
+    throw new Error(`Backend unavailable at ${API_BASE || 'the local Vite proxy'}. Ensure the Python backend is running.`);
   }
 }
 
 export async function getModelStatus() {
   try {
-    const res = await fetch(apiUrl('/api/model/status'));
+    const res = await fetchWithTimeout(apiUrl('/api/model/status'), {}, 10000);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
@@ -43,7 +52,7 @@ export async function getModelStatus() {
 
 export async function reloadModelWeights() {
   try {
-    const res = await fetch(apiUrl('/api/model/reload'), { method: 'POST' });
+    const res = await fetchWithTimeout(apiUrl('/api/model/reload'), { method: 'POST' }, 90000);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
@@ -53,7 +62,7 @@ export async function reloadModelWeights() {
 
 export async function resetBackendTracker() {
   try {
-    const res = await fetch(apiUrl('/api/tracker/reset'), { method: 'POST' });
+    const res = await fetchWithTimeout(apiUrl('/api/tracker/reset'), { method: 'POST' }, 10000);
     return await res.json();
   } catch (err) {
     console.warn('Tracker reset warning:', err);
@@ -66,11 +75,11 @@ export async function sendFrameForAnalysis(payload) {
         !/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(payload.image_base64)) {
       throw new Error('Frame must be a JPEG, PNG, or WebP image encoded as a base64 data URL.');
     }
-    const res = await fetch(apiUrl('/api/analyze/frame'), {
+    const res = await fetchWithTimeout(apiUrl('/api/analyze/frame'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    });
+    }, 30000);
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
       throw new Error(errData.detail || `Frame analysis error: HTTP ${res.status}`);

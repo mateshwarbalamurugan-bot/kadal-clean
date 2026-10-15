@@ -48,13 +48,13 @@ export default function AccumulationGrid({ accumulationData }) {
   return (
     <div className="card accumulation-card">
       <div className="card-header">
-        <h2>Water Surface Accumulation-Zone Grid (3×3)</h2>
-        <span className="count-badge">{data.hotspots_count} observed hotspot(s)</span>
+        <h2>Image-Space Accumulation Grid (3×3)</h2>
+        <span className="count-badge">{data.hotspots_count} observed image-space hotspot(s)</span>
       </div>
 
       <p className="section-description">
-        Divides the selected water area into 9 zones to monitor dwell times, object concentration,
-        and tub wall/corner accumulation traps.
+        Divides the selected normalized frame region into 9 zones and summarizes tracked-object dwell.
+        Outer cells are image edges, not verified physical walls; this is not a geographic pollution map.
       </p>
 
       {data.summary_status === 'insufficient_data' && (
@@ -73,7 +73,7 @@ export default function AccumulationGrid({ accumulationData }) {
               >
                 <div className="cell-header">
                   <span className="cell-coord">[{rIdx + 1}, {cIdx + 1}]</span>
-                  {cell.is_corner_or_wall && <span className="cell-wall-tag">Wall</span>}
+                  {cell.is_corner_or_wall && <span className="cell-wall-tag">Image edge</span>}
                 </div>
                 <div className="cell-metric">
                   <strong>{cell.unique_objects_count}</strong> objs
@@ -91,7 +91,7 @@ export default function AccumulationGrid({ accumulationData }) {
       </div>
 
       <div className="grid-legend">
-        <span><span className="legend-box legend-danger"></span> Observed Accumulation (≥2 objs & ≥5s)</span>
+        <span><span className="legend-box legend-danger"></span> Observed Image-Space Accumulation (≥2 tracks & ≥5s)</span>
         <span><span className="legend-box legend-warning"></span> Tentative Candidate</span>
         <span><span className="legend-box legend-primary"></span> Predicted Accumulation</span>
       </div>

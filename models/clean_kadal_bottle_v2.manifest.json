@@ -1,0 +1,43 @@
+{
+  "name": "Clean Kadal Bottle Detector v2",
+  "file": "clean_kadal_bottle_v2.pt",
+  "format": "Ultralytics/PyTorch checkpoint",
+  "size_bytes": 6588202,
+  "sha256": "fb39241b53650857d2d2f71ab454c44076df892339f196d7cdab5ec43de23da4",
+  "classes": ["bottle"],
+  "training": {
+    "base": "YOLOv8n",
+    "max_epochs": 50,
+    "stopped_at_epoch": 40,
+    "image_size": 1024,
+    "batch_size": 8
+  },
+  "held_out_test": {
+    "images": 799,
+    "precision": 0.8659,
+    "recall": 0.8141,
+    "mAP50": 0.8683,
+    "mAP50_95": 0.4201,
+    "source": "test_metrics.json recorded by CleanKadal.ipynb; not independently reproduced in this session"
+  },
+  "single_image_smoke_test": {
+    "source": "one raw labeled image from the supplied Flow-Img v3 test split, bundled as frontend/public/sample_flowimg_v3_bottle.jpg",
+    "image_size_1024": {
+      "predictions": 8,
+      "ground_truth_objects": 8,
+      "matches_iou_at_least_0_50": 8,
+      "mean_iou_of_matches": 0.692,
+      "cpu_latency_ms_median_after_warmup": 103.7
+    },
+    "image_size_640": {
+      "predictions": 10,
+      "ground_truth_objects": 8,
+      "matches_iou_at_least_0_50": 8,
+      "mean_iou_of_matches": 0.68,
+      "additional_unmatched_predictions": 2,
+      "cpu_latency_ms_median_after_warmup": 59.5
+    },
+    "limitation": "One image only; CPU sandbox timing excludes FastAPI/network/camera overhead and is not a field benchmark."
+  },
+  "source": "User's connected Google Drive model file; see models/README.md"
+}

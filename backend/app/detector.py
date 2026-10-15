@@ -1,12 +1,17 @@
 """
 Clean Kadal — Object Detector Module
-Executes inference on video frames, normalizes bounding box coordinates,
-and labels litter candidates with honest provenance.
+Runs YOLO inference on real frames, normalizes bounding boxes, and preserves
+honest model provenance for custom and generic baseline predictions.
 """
-from typing import List, Optional
+from typing import List
 import numpy as np
+
 from .schemas import Detection, BoundingBox
-from .model_loader import ModelManager, COCO_LITTER_CANDIDATE_CLASSES
+from .model_loader import (
+    COCO_LITTER_CANDIDATE_CLASSES,
+    CUSTOM_LITTER_CANDIDATE_CLASSES,
+    ModelManager,
+)
 
 
 class ObjectDetector:
@@ -14,71 +19,75 @@ class ObjectDetector:
         self.manager = model_manager
 
     def detect(self, img_bgr: np.ndarray, conf_threshold: float = 0.25) -> List[Detection]:
-        """
-        Runs object detection on the provided BGR image.
-        Returns empty list if model is not loaded or no objects are found.
-        """
+        """Run actual model inference on a BGR frame and return normalized detections."""
         if self.manager.model is None or not self.manager.status.model_loaded:
             return []
 
-        h, w = img_bgr.shape[:2]
-        if h <= 0 or w <= 0:
+        height, width = img_bgr.shape[:2]
+        if height <= 0 or width <= 0:
             return []
 
         try:
             results = self.manager.model.predict(
                 img_bgr,
                 conf=conf_threshold,
-                verbose=False
+                imgsz=self.manager.status.inference_size,
+                verbose=False,
             )
         except Exception:
+            # A bad frame/inference failure should not crash the API request loop.
             return []
 
         detections: List[Detection] = []
         is_custom = self.manager.status.is_custom_trained
 
-        for r in results:
-            boxes = r.boxes
+        for result in results:
+            boxes = result.boxes
             if boxes is None or len(boxes) == 0:
                 continue
 
             for box in boxes:
-                cls_id = int(box.cls[0].item())
-                conf = float(box.conf[0].item())
+                class_id = int(box.cls[0].item())
+                confidence = float(box.conf[0].item())
                 xyxy = box.xyxy[0].cpu().numpy()
 
-                x1_norm = max(0.0, min(1.0, float(xyxy[0] / w)))
-                y1_norm = max(0.0, min(1.0, float(xyxy[1] / h)))
-                x2_norm = max(0.0, min(1.0, float(xyxy[2] / w)))
-                y2_norm = max(0.0, min(1.0, float(xyxy[3] / h)))
+                x1 = max(0.0, min(1.0, float(xyxy[0] / width)))
+                y1 = max(0.0, min(1.0, float(xyxy[1] / height)))
+                x2 = max(0.0, min(1.0, float(xyxy[2] / width)))
+                y2 = max(0.0, min(1.0, float(xyxy[3] / height)))
 
-                # Lookup class name
-                if hasattr(self.manager.model, "names") and cls_id in self.manager.model.names:
-                    class_name = str(self.manager.model.names[cls_id])
-                elif cls_id < len(self.manager.status.supported_classes):
-                    class_name = str(self.manager.status.supported_classes[cls_id])
+                names = getattr(self.manager.model, "names", {})
+                if isinstance(names, dict) and class_id in names:
+                    class_name = str(names[class_id])
+                elif isinstance(names, (list, tuple)) and class_id < len(names):
+                    class_name = str(names[class_id])
+                elif class_id < len(self.manager.status.supported_classes):
+                    class_name = str(self.manager.status.supported_classes[class_id])
                 else:
-                    class_name = f"class_{cls_id}"
+                    class_name = f"class_{class_id}"
 
-                # Evaluate potential litter candidate flag
+                normalized_name = class_name.strip().lower().replace(" ", "_")
                 if is_custom:
-                    # In custom model, plastic waste classes are litter candidates, leaf is natural debris
-                    is_litter = (class_name in ("plastic_bottle", "plastic_cup", "plastic_wrapper", "plastic_bag", "bottle_cap"))
+                    is_litter_candidate = normalized_name in CUSTOM_LITTER_CANDIDATE_CLASSES
                 else:
-                    # In generic baseline COCO model, bottle and cup are potential litter candidates
-                    is_litter = (class_name.lower() in COCO_LITTER_CANDIDATE_CLASSES)
+                    is_litter_candidate = class_name.strip().lower() in COCO_LITTER_CANDIDATE_CLASSES
+
+                # Do not count or track unrelated COCO classes (for example people,
+                # cars, or buildings) as aquatic waste candidates.
+                if not is_litter_candidate:
+                    continue
 
                 detections.append(Detection(
                     class_name=class_name,
-                    confidence=round(conf, 3),
+                    confidence=round(confidence, 3),
                     box=BoundingBox(
-                        x_min=round(x1_norm, 4),
-                        y_min=round(y1_norm, 4),
-                        x_max=round(x2_norm, 4),
-                        y_max=round(y2_norm, 4)
+                        x_min=round(x1, 4),
+                        y_min=round(y1, 4),
+                        x_max=round(x2, 4),
+                        y_max=round(y2, 4),
                     ),
-                    is_litter_candidate=is_litter,
-                    is_custom_class=is_custom
+                    is_litter_candidate=is_litter_candidate,
+                    is_custom_class=is_custom,
                 ))
 
         return detections

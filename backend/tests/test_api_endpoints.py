@@ -36,6 +36,20 @@ def test_production_frontend_origin_is_allowed_by_cors():
     assert response.headers["access-control-allow-origin"] == "https://clean-kadal.vercel.app"
 
 
+def test_vercel_preview_origin_is_allowed_by_cors():
+    origin = "https://clean-kadal-git-feature-matcom1.vercel.app"
+    response = client.options(
+        "/api/analyze/frame",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
 def test_get_model_status():
     response = client.get("/api/model/status")
     assert response.status_code == 200
@@ -139,6 +153,25 @@ def test_frame_analysis_endpoint_synthetic():
     assert "tracked_objects" in data
     assert "wave_analysis" in data
     assert "camera_motion" in data
+
+
+def test_static_image_disables_temporal_outputs():
+    img = np.zeros((120, 160, 3), dtype=np.uint8)
+    _, buf = cv2.imencode(".jpg", img)
+    b64_str = base64.b64encode(buf).decode("utf-8")
+    response = client.post("/api/analyze/frame", json={
+        "image_base64": f"data:image/jpeg;base64,{b64_str}",
+        "timestamp": 12346.0,
+        "is_static_image": True,
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tracked_objects"] == []
+    assert data["accumulation_summary"] is None
+    assert data["camera_motion"]["status"] == "unavailable"
+    assert data["wave_analysis"]["reliability"] == "insufficient_data"
+    assert any("Static image" in warning for warning in data["warnings"])
 
 
 def test_frame_analysis_rejects_html_data_url():

@@ -40,7 +40,7 @@ class TrackedObject(BaseModel):
     position: List[float] = Field(..., description="Normalized [center_x, center_y]")
     velocity: List[float] = Field(..., description="Estimated [vx, vy] in norm units/sec")
     speed: float = Field(..., description="Euclidean speed in norm units/sec")
-    direction_deg: Optional[float] = Field(None, description="Compass/image angle in degrees (0=right, 90=down)")
+    direction_deg: Optional[float] = Field(None, description="Image-space angle in degrees (0=right, 90=down); not a compass bearing")
     track_duration_sec: float = Field(..., ge=0.0)
     history: List[TrackHistoryPoint] = Field(default_factory=list)
     is_litter_candidate: bool = False
@@ -53,11 +53,11 @@ class TrackedObject(BaseModel):
     missed_frames: int = 0
     travelled_from: Optional[str] = Field(
         None,
-        description="Estimated origin direction and physical entry zone (where object travelled from)"
+        description="Estimated first-seen image-space origin and relative frame direction; not a physical entry point"
     )
     navigating_towards: Optional[str] = Field(
         None,
-        description="Estimated navigation heading and destination zone (where object is navigating towards)"
+        description="Estimated short-term image-space motion direction and predicted frame zone; not a compass route"
     )
     origin_position: Optional[List[float]] = Field(
         None,
@@ -65,7 +65,7 @@ class TrackedObject(BaseModel):
     )
     heading_compass: Optional[str] = Field(
         None,
-        description="Compass heading abbreviation (e.g. 'SE', 'NW')"
+        description="Frame-relative sector shorthand (e.g. 'SE', 'NW'); not a compass or GPS bearing"
     )
 
 
@@ -79,6 +79,7 @@ class ModelStatus(BaseModel):
     device: str
     status_message: str
     confidence_threshold: float = 0.25
+    inference_size: int = Field(640, ge=320, le=1536, description="Square inference image size in pixels")
 
 
 class CameraMotionEstimate(BaseModel):
@@ -148,7 +149,10 @@ class AccumulationCell(BaseModel):
         "none",
         description="'none', 'tentative_candidate', 'observed_accumulation', or 'predicted_accumulation'"
     )
-    is_corner_or_wall: bool = False
+    is_corner_or_wall: bool = Field(
+        False,
+        description="True when this grid cell touches the image-space perimeter; no physical wall is detected"
+    )
 
 
 class AccumulationTrackInput(BaseModel):
@@ -175,13 +179,21 @@ class AccumulationAnalysisResponse(BaseModel):
 
 
 class FrameAnalysisRequest(BaseModel):
-    image_base64: str
+    image_base64: str = Field(..., min_length=1, max_length=15_000_000)
     timestamp: float
+    is_static_image: bool = Field(
+        False,
+        description="A one-off still image; do not report temporal wave motion or object tracking from it"
+    )
     water_region: Optional[BoundingBox] = None
     reference_region: Optional[BoundingBox] = None
     prediction_horizon_sec: float = 1.5
     prediction_method: str = "constant_velocity"
     manual_wind_direction: Optional[str] = None
+    confidence_threshold: Optional[float] = Field(
+        None, ge=0.05, le=0.95,
+        description="Optional per-frame detector confidence threshold; defaults to model configuration"
+    )
 
 
 class FrameAnalysisResponse(BaseModel):
