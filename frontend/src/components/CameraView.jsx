@@ -64,13 +64,32 @@ export default function CameraView({
         tracks.forEach((t) => t.stop());
       }
 
-      const constraints = {
-        video: selectedDeviceId
-          ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
-          : { width: { ideal: 640 }, height: { ideal: 480 } },
-      };
+      const cameraAttempts = [];
+      if (selectedDeviceId) {
+        cameraAttempts.push({
+          video: { deviceId: { ideal: selectedDeviceId }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } },
+          audio: false,
+        });
+      }
+      cameraAttempts.push(
+        { video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } }, audio: false },
+        { video: true, audio: false }
+      );
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      let stream;
+      let lastCameraError;
+      for (const cameraConstraints of cameraAttempts) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(cameraConstraints);
+          break;
+        } catch (cameraError) {
+          lastCameraError = cameraError;
+          if (cameraError.name === 'NotAllowedError' || cameraError.name === 'PermissionDeniedError') {
+            throw cameraError;
+          }
+        }
+      }
+      if (!stream) throw lastCameraError || new Error('No usable camera was found.');
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
@@ -81,6 +100,8 @@ export default function CameraView({
         onError('Camera permission denied by browser. Please enable webcam permission in browser site settings.');
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         onError('No camera hardware found on this computer.');
+      } else if (err.name === 'OverconstrainedError') {
+        onError('This camera does not support the requested settings. Try another camera or reduce the camera resolution.');
       } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
         onError('Camera is already in use by another application or tab.');
       } else {

@@ -1,5 +1,43 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 
+const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const SAMPLE_IMAGE_URL = '/sample_floating_waste.jpg';
+
+async function imageBlobToDataUrl(blob) {
+  const mimeType = blob.type.split(';', 1)[0].trim().toLowerCase();
+  if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) {
+    throw new Error(`Unsupported image type "${mimeType || 'unknown'}". Use JPEG, PNG, or WebP.`);
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => image.naturalWidth > 0 && image.naturalHeight > 0
+        ? resolve()
+        : reject(new Error('The selected file does not contain a decodable image.'));
+      image.onerror = () => reject(new Error('The selected file does not contain a decodable image.'));
+      image.src = objectUrl;
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== 'string' || !/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(dataUrl)) {
+        reject(new Error('Could not encode the image as valid base64 image data.'));
+        return;
+      }
+      resolve(dataUrl);
+    };
+    reader.onerror = () => reject(new Error('Could not read the selected image file.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export default function LiveDemo({
   analysisData,
   onAnalyzeFrame,
@@ -69,15 +107,37 @@ export default function LiveDemo({
         throw new Error('Webcam API is not supported in this browser.');
       }
 
-      const videoConstraints = {
-        width: { ideal: 640 },
-        height: { ideal: 480 },
-      };
-      if (deviceId) videoConstraints.deviceId = { exact: deviceId };
+      const cameraAttempts = [];
+      if (deviceId) {
+        cameraAttempts.push({
+          video: {
+            deviceId: { ideal: deviceId },
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: 15 },
+          },
+          audio: false,
+        });
+      }
+      cameraAttempts.push(
+        { video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } }, audio: false },
+        { video: true, audio: false }
+      );
 
-      nextStream = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraints,
-      });
+      let lastCameraError;
+      for (const constraints of cameraAttempts) {
+        try {
+          nextStream = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
+        } catch (cameraError) {
+          lastCameraError = cameraError;
+          // Permission denial is not solved by progressively looser constraints.
+          if (cameraError.name === 'NotAllowedError' || cameraError.name === 'PermissionDeniedError') {
+            throw cameraError;
+          }
+        }
+      }
+      if (!nextStream) throw lastCameraError || new Error('No usable camera was found.');
 
       if (videoRef.current) {
         videoRef.current.srcObject = nextStream;
@@ -101,12 +161,12 @@ export default function LiveDemo({
       let msg = 'Could not access camera.';
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         msg = 'Camera permission denied. Enable camera in site settings or try the sample image below.';
-      } else if (err.name === 'NotFoundError') {
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         msg = deviceId
           ? 'The selected camera is unavailable. Reconnect it or choose another camera.'
           : 'No camera found. Click "Try Sample Image" to see AI detection.';
       } else if (err.name === 'OverconstrainedError') {
-        msg = 'The selected camera is unavailable. Reconnect it or choose another camera.';
+        msg = 'This camera does not support the requested settings. Try another camera or use the sample image.';
       } else if (err.name === 'NotReadableError') {
         msg = 'Camera is in use by another app. Try the sample image below.';
       }
@@ -157,21 +217,21 @@ export default function LiveDemo({
   }, [cameraActive, onAnalyzeFrame]);
 
   // Handle Image Upload
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     stopWebcam();
     setIsSampleMode(true);
     setInternalError(null);
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result;
+    try {
+      const dataUrl = await imageBlobToDataUrl(file);
       setActiveImageSrc(dataUrl);
+      setIsSampleMode(false);
       onAnalyzeFrame(dataUrl, true);
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      setInternalError(`Could not use image: ${err.message}`);
+    }
     // Reset file input value so same file can be selected again
     e.target.value = '';
   };
@@ -183,17 +243,24 @@ export default function LiveDemo({
     setInternalError(null);
 
     try {
-      const response = await fetch('/sample_floating_waste.jpg');
+      const response = await fetch(SAMPLE_IMAGE_URL, { cache: 'no-store' });
+      if (!response.ok) {
+        throw new Error(`Sample image request returned HTTP ${response.status}.`);
+      }
+      const responseType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
+      if (!SUPPORTED_IMAGE_TYPES.has(responseType)) {
+        throw new Error(`Expected an image from ${SAMPLE_IMAGE_URL}, received "${responseType || 'unknown content type'}".`);
+      }
       const blob = await response.blob();
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const dataUrl = event.target?.result;
-        setActiveImageSrc(dataUrl);
-        onAnalyzeFrame(dataUrl, true);
-      };
-      reader.readAsDataURL(blob);
+      if (blob.type && blob.type.split(';', 1)[0].trim().toLowerCase() !== responseType) {
+        throw new Error('The sample image response has inconsistent MIME types.');
+      }
+      const dataUrl = await imageBlobToDataUrl(blob);
+      setActiveImageSrc(dataUrl);
+      onAnalyzeFrame(dataUrl, true);
     } catch (err) {
-      setInternalError('Could not load sample image: ' + err.message);
+      setActiveImageSrc(null);
+      setInternalError(`Could not load sample image: ${err.message}`);
     }
   };
 

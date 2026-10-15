@@ -62,6 +62,10 @@ export async function resetBackendTracker() {
 
 export async function sendFrameForAnalysis(payload) {
   try {
+    if (!payload || typeof payload.image_base64 !== 'string' ||
+        !/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(payload.image_base64)) {
+      throw new Error('Frame must be a JPEG, PNG, or WebP image encoded as a base64 data URL.');
+    }
     const res = await fetch(apiUrl('/api/analyze/frame'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -3,6 +3,8 @@ Clean Kadal — FastAPI Backend
 AI-Based Floating Waste Detection and Water-Motion Analysis Research Service
 """
 import base64
+import os
+import re
 import time
 from typing import Dict, Any, List
 import cv2
@@ -38,11 +40,24 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS configuration for local development and production deployments (e.g., Vercel)
+def _configured_cors_origins() -> List[str]:
+    configured = os.getenv("CORS_ORIGINS")
+    if configured is not None:
+        return [origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()]
+    return [
+        "https://clean-kadal.vercel.app",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
+# Explicitly allow the production site, local development, and Vercel preview URLs
+# for this project. An environment variable can add/remove exact deployment origins.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_configured_cors_origins(),
+    allow_origin_regex=r"^https://clean-kadal(?:-[a-z0-9-]+)?\.vercel\.app$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -61,8 +76,9 @@ accumulation_analyzer = AccumulationAnalyzer()
 
 
 @app.get("/health", tags=["System"])
+@app.get("/status", tags=["System"])
 def health_check() -> Dict[str, Any]:
-    """Health check endpoint for Render, container orchestrators, and frontend connectivity check."""
+    """Health/status endpoint for Render, orchestrators, and frontend connectivity checks."""
     return {
         "status": "healthy",
         "service": "Clean Kadal Research Backend",
@@ -71,6 +87,39 @@ def health_check() -> Dict[str, Any]:
         "model_type": model_mgr.status.model_type,
         "timestamp": time.time()
     }
+
+
+def _decode_frame_image(image_base64: str) -> np.ndarray:
+    """Decode a raw base64 image or a supported, MIME-declared image data URL."""
+    mime_type = None
+    payload = image_base64
+    if image_base64.startswith("data:"):
+        header, separator, payload = image_base64.partition(",")
+        match = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64", header)
+        if not separator or not match:
+            raise ValueError("Only base64 data URLs with image/jpeg, image/png, or image/webp are supported")
+        mime_type = match.group(1)
+
+    try:
+        img_bytes = base64.b64decode(payload, validate=True)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise ValueError("Image payload is not valid base64") from exc
+    if not img_bytes:
+        raise ValueError("Image payload is empty")
+
+    if mime_type:
+        signatures = {
+            "image/jpeg": lambda data: data.startswith(b"\xff\xd8\xff"),
+            "image/png": lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
+            "image/webp": lambda data: len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP",
+        }
+        if not signatures[mime_type](img_bytes):
+            raise ValueError(f"Declared MIME type {mime_type} does not match the image bytes")
+
+    decoded = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise ValueError("cv2.imdecode returned None")
+    return decoded
 
 
 @app.get("/api/model/status", response_model=ModelStatus, tags=["AI Model"])
@@ -106,18 +155,9 @@ def analyze_frame(req: FrameAnalysisRequest) -> FrameAnalysisResponse:
     """
     warnings: List[str] = []
 
-    # 1. Decode base64 image
+    # 1. Decode the documented image_base64 contract (raw base64 or a supported image data URL).
     try:
-        if "," in req.image_base64:
-            payload = req.image_base64.split(",", 1)[1]
-        else:
-            payload = req.image_base64
-
-        img_bytes = base64.b64decode(payload)
-        np_arr = np.frombuffer(img_bytes, np.uint8)
-        img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        if img_bgr is None:
-            raise ValueError("cv2.imdecode returned None")
+        img_bgr = _decode_frame_image(req.image_base64)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
