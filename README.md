@@ -133,33 +133,20 @@ cd ..
 
 ---
 
-## 6. Training the Custom Floating-Waste Model
+## 6. Training the Custom Marine-Litter Model
 
-1. Collect images from your boat camera into `datasets/raw_captures/`.
-2. Annotate bounding boxes using CVAT or LabelImg for the 6 target classes:
-   `plastic_bottle`, `plastic_cup`, `plastic_wrapper`, `plastic_bag`, `bottle_cap`, `leaf`.
-3. Split sessions to prevent video data leakage:
-   ```powershell
-   .\venv\Scripts\python.exe ai_training/split_dataset.py
-   ```
-4. Verify dataset integrity:
-   ```powershell
-   .\venv\Scripts\python.exe ai_training/check_dataset.py
-   ```
-5. Fine-tune the custom model:
-   ```powershell
-   .\venv\Scripts\python.exe ai_training/train.py --epochs 50 --batch 16 --imgsz 640 --device cpu
-   ```
-6. Validate test metrics:
-   ```powershell
-   .\venv\Scripts\python.exe ai_training/validate.py
-   ```
-7. Export and verify ONNX model:
-   ```powershell
-   .\venv\Scripts\python.exe ai_training/export_model.py
-   ```
-8. In the Clean Kadal dashboard, click **Reload Model Weights**. The status will switch to:
-   `Custom Clean Kadal Model Active`.
+The current custom detector is trained to recognize one generic floating-litter class, `garbage`. It does not identify bottles, cups, wrappers, bags, caps, or material types. Those six-class labels in `ai_training/dataset.yaml` are a template for a future, separately annotated dataset—not capabilities of the deployed model.
+
+To reproduce the current training pipeline, download the Floating Marine Litter V2 archive from the [official dataset record](https://www.seanoe.org/data/00950/106148/), import its published splits, validate annotations, then fine-tune and evaluate:
+
+```bash
+python ai_training/import_fml_dataset.py --archive /path/to/120969.zip
+python ai_training/check_dataset.py --data ai_training/dataset_fml.yaml
+python ai_training/train.py --data ai_training/dataset_fml.yaml --epochs 30 --batch 8 --imgsz 640 --device 0
+python ai_training/validate.py --weights models/custom_best.pt --data ai_training/dataset_fml.yaml --split test
+```
+
+Use `--device cpu` on a CPU-only machine and reduce `--batch` if memory is limited. The backend automatically prefers `models/custom_best.pt` on startup. See [`docs/MARINE_DETECTOR.md`](docs/MARINE_DETECTOR.md) for dataset attribution, class limitations, and deployment notes. For future material-specific classes, use [`docs/DATASET_GUIDE.md`](docs/DATASET_GUIDE.md) and annotate each subtype from camera footage rather than relabeling generic `garbage` boxes.
 
 ---
 
