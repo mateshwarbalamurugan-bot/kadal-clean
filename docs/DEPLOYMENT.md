@@ -39,11 +39,17 @@ Vercel provides edge hosting for Vite/React applications.
    - **Framework Preset**: `Vite` (automatically detected).
    - **Build Command**: `npm run build`
    - **Output Directory**: `dist`
-4. In **Environment Variables**:
+4. Deploy the Render backend first and copy its actual public HTTPS service URL. Confirm that
+   `<backend-url>/health` returns a healthy response. The example hostname above is only a
+   placeholder; use the URL Render assigned to your service.
+5. In the Vercel project's **Settings > Environment Variables**, set:
    - Key: `VITE_API_BASE_URL`
-   - Value: `https://clean-kadal-backend.onrender.com` (your deployed Render URL)
-5. Click **Deploy**.
-6. Once deployed, your site will be live at `https://clean-kadal.vercel.app`.
+   - Value: the actual public HTTPS backend URL, with no `/health` suffix
+   - Environments: Production and Preview (as needed)
+6. Redeploy the Vercel project after saving the variable. Vite embeds this value at build time.
+   Production builds deliberately do not fall back to `localhost`; a browser's `localhost` is
+   the visitor's own computer, not the Render service.
+7. The site will be available at `https://clean-kadal.vercel.app` once the deployment finishes.
 
 ---
 
@@ -52,3 +58,6 @@ Vercel provides edge hosting for Vite/React applications.
 - The browser Webcam API requires a secure origin (**HTTPS**), which both Vercel and Render supply out of the box.
 - The web page accesses the camera of the **person viewing the site in their browser**, not the computer that deployed the server.
 - Explicit browser permission will be requested when clicking **Start Camera**.
+- When multiple cameras are available, use the **Camera** selector beside the controls to switch
+  from the laptop camera to the connected USB webcam. Device names may appear only after camera
+  permission has been granted.

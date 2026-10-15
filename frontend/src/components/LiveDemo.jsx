@@ -18,6 +18,9 @@ export default function LiveDemo({
 
   const [activeImageSrc, setActiveImageSrc] = useState(null);
   const [internalError, setInternalError] = useState(null);
+  const [videoInputs, setVideoInputs] = useState([]);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [isCameraSwitching, setIsCameraSwitching] = useState(false);
 
   // Stop Webcam helper
   const stopWebcam = useCallback(() => {
@@ -29,25 +32,69 @@ export default function LiveDemo({
     setCameraActive(false);
   }, [setCameraActive]);
 
+  const refreshVideoInputs = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return [];
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cameras = devices.filter((device) => device.kind === 'videoinput');
+    setVideoInputs(cameras);
+    return cameras;
+  }, []);
+
+  useEffect(() => {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.enumerateDevices) return undefined;
+
+    const refresh = () => refreshVideoInputs().catch(() => {});
+    refresh();
+    mediaDevices.addEventListener?.('devicechange', refresh);
+    return () => mediaDevices.removeEventListener?.('devicechange', refresh);
+  }, [refreshVideoInputs]);
+
+  useEffect(() => () => {
+    const stream = videoRef.current?.srcObject;
+    stream?.getTracks().forEach((track) => track.stop());
+  }, []);
+
   // Start Webcam
-  const handleStartCamera = async () => {
+  const handleStartCamera = async (deviceId = selectedCameraId) => {
     setInternalError(null);
     setActiveImageSrc(null);
     setIsSampleMode(false);
+    setIsCameraSwitching(true);
+    let nextStream = null;
+    const previousStream = videoRef.current?.srcObject;
 
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Webcam API is not supported in this browser.');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 } },
+      const videoConstraints = {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+      };
+      if (deviceId) videoConstraints.deviceId = { exact: deviceId };
+
+      nextStream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
       });
 
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        videoRef.current.srcObject = nextStream;
+        try {
+          await videoRef.current.play();
+        } catch (playError) {
+          videoRef.current.srcObject = previousStream;
+          nextStream.getTracks().forEach((track) => track.stop());
+          throw playError;
+        }
+        if (previousStream && previousStream !== nextStream) {
+          previousStream.getTracks().forEach((track) => track.stop());
+        }
+        const activeDeviceId = nextStream.getVideoTracks()[0]?.getSettings().deviceId || deviceId;
+        setSelectedCameraId(activeDeviceId || '');
         setCameraActive(true);
+        await refreshVideoInputs();
       }
     } catch (err) {
       console.warn('Camera error:', err);
@@ -55,12 +102,30 @@ export default function LiveDemo({
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         msg = 'Camera permission denied. Enable camera in site settings or try the sample image below.';
       } else if (err.name === 'NotFoundError') {
-        msg = 'No camera found. Click "Try Sample Image" to see AI detection.';
+        msg = deviceId
+          ? 'The selected camera is unavailable. Reconnect it or choose another camera.'
+          : 'No camera found. Click "Try Sample Image" to see AI detection.';
+      } else if (err.name === 'OverconstrainedError') {
+        msg = 'The selected camera is unavailable. Reconnect it or choose another camera.';
       } else if (err.name === 'NotReadableError') {
         msg = 'Camera is in use by another app. Try the sample image below.';
       }
+      if (nextStream && videoRef.current?.srcObject !== nextStream) {
+        nextStream.getTracks().forEach((track) => track.stop());
+      }
       setInternalError(msg);
-      setCameraActive(false);
+      if (!previousStream) setCameraActive(false);
+    } finally {
+      setIsCameraSwitching(false);
+    }
+  };
+
+  const handleCameraChange = (event) => {
+    const deviceId = event.target.value;
+    if (cameraActive) {
+      handleStartCamera(deviceId);
+    } else {
+      setSelectedCameraId(deviceId);
     }
   };
 
@@ -311,6 +376,26 @@ export default function LiveDemo({
             >
               ⚡ Try Sample Image
             </button>
+
+            {videoInputs.length > 1 && (
+              <label className="camera-picker">
+                <span className="camera-picker-label">Camera</span>
+                <select
+                  className="camera-picker-select"
+                  aria-label="Select camera"
+                  value={selectedCameraId}
+                  onChange={handleCameraChange}
+                  disabled={isCameraSwitching}
+                >
+                  <option value="">System default</option>
+                  {videoInputs.map((device, index) => (
+                    <option key={device.deviceId || `camera-${index}`} value={device.deviceId}>
+                      {device.label || `Camera ${index + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
 
           <div className="demo-source-tag">

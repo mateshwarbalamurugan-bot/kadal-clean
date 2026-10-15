@@ -1,26 +1,39 @@
 /**
  * Clean Kadal — Backend API Service
- * Configured via VITE_API_BASE_URL (defaults to http://localhost:8000)
+ * Configured via VITE_API_BASE_URL. Local development defaults to localhost;
+ * production builds require a deployed HTTPS backend URL.
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const configuredApiBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
+const API_BASE = (configuredApiBase || (import.meta.env.DEV ? 'http://localhost:8000' : ''))
+  .replace(/\/+$/, '');
+
+function apiUrl(path) {
+  if (!API_BASE) {
+    throw new Error(
+      'Backend URL is not configured. Set VITE_API_BASE_URL in Vercel to the public HTTPS URL of your deployed backend, then redeploy.'
+    );
+  }
+  return `${API_BASE}${path}`;
+}
 
 export async function checkBackendHealth() {
   try {
-    const res = await fetch(`${API_BASE}/health`, {
+    const res = await fetch(apiUrl('/health'), {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     return await res.json();
   } catch (err) {
+    if (err.message?.includes('VITE_API_BASE_URL')) throw err;
     throw new Error(`Backend unavailable at ${API_BASE}. Ensure the Python backend is running.`);
   }
 }
 
 export async function getModelStatus() {
   try {
-    const res = await fetch(`${API_BASE}/api/model/status`);
+    const res = await fetch(apiUrl('/api/model/status'));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
@@ -30,7 +43,7 @@ export async function getModelStatus() {
 
 export async function reloadModelWeights() {
   try {
-    const res = await fetch(`${API_BASE}/api/model/reload`, { method: 'POST' });
+    const res = await fetch(apiUrl('/api/model/reload'), { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
@@ -40,7 +53,7 @@ export async function reloadModelWeights() {
 
 export async function resetBackendTracker() {
   try {
-    const res = await fetch(`${API_BASE}/api/tracker/reset`, { method: 'POST' });
+    const res = await fetch(apiUrl('/api/tracker/reset'), { method: 'POST' });
     return await res.json();
   } catch (err) {
     console.warn('Tracker reset warning:', err);
@@ -49,7 +62,7 @@ export async function resetBackendTracker() {
 
 export async function sendFrameForAnalysis(payload) {
   try {
-    const res = await fetch(`${API_BASE}/api/analyze/frame`, {
+    const res = await fetch(apiUrl('/api/analyze/frame'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -65,7 +78,7 @@ export async function sendFrameForAnalysis(payload) {
 }
 
 export async function predictTrajectory(payload) {
-  const res = await fetch(`${API_BASE}/api/analyze/trajectory`, {
+  const res = await fetch(apiUrl('/api/analyze/trajectory'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -78,7 +91,7 @@ export async function predictTrajectory(payload) {
 }
 
 export async function evaluateTrajectory(payload) {
-  const res = await fetch(`${API_BASE}/api/analyze/trajectory/evaluate`, {
+  const res = await fetch(apiUrl('/api/analyze/trajectory/evaluate'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -88,7 +101,7 @@ export async function evaluateTrajectory(payload) {
 }
 
 export async function analyzeAccumulation(payload) {
-  const res = await fetch(`${API_BASE}/api/analyze/accumulation`, {
+  const res = await fetch(apiUrl('/api/analyze/accumulation'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
