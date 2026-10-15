@@ -31,6 +31,7 @@ datasets/labels/
 datasets/fml_v2/
 datasets/iwhr_floater/
 ai_training/runs/
+runs/
 
 # Node.js
 node_modules/
