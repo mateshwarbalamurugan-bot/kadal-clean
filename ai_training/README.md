@@ -16,7 +16,7 @@ The reproducible public source is Lazzerini, Ferreira & Ridolfi, *Floating Marin
    python ai_training/check_dataset.py --data ai_training/dataset_fml.yaml
    ```
 
-The importer writes images and labels to `datasets/fml_v2/`, verifies normalized YOLO boxes, records attribution metadata, and preserves the publisher's split boundaries.
+The importer writes images and labels to `datasets/fml_v2/`, verifies normalized YOLO boxes, records attribution metadata, and preserves the publisher's split boundaries. To reproduce the smaller, deterministic CPU development subset, pass `--limit-train 500 --limit-val 100 --limit-test 100 --seed 42 --overwrite` to the import command. The selected image names and sample settings are recorded in `dataset_metadata.json`.
 
 ## Train and validate
 

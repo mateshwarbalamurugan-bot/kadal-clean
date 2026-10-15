@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import shutil
 from collections import Counter
 from pathlib import Path, PurePosixPath
@@ -28,6 +29,13 @@ def parse_args() -> argparse.Namespace:
         "--output", type=Path, default=project_root / "datasets" / "fml_v2",
         help="Output dataset directory (default: datasets/fml_v2)",
     )
+    parser.add_argument(
+        "--limit-per-split", type=int, default=None,
+        help="Optional seeded sample size per official split; useful for quick CPU runs",
+    )
+    for split in SPLITS:
+        parser.add_argument(f"--limit-{split}", type=int, default=None, help=f"Optional seeded image count for the {split} split")
+    parser.add_argument("--seed", type=int, default=42, help="Seed for --limit-per-split (default: 42)")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing output directory")
     return parser.parse_args()
 
@@ -53,9 +61,21 @@ def validate_label_text(text: str, source_name: str) -> tuple[int, Counter[int]]
     return boxes, class_counts
 
 
-def import_dataset(archive_path: Path, output_dir: Path, overwrite: bool = False) -> dict:
+def import_dataset(
+    archive_path: Path,
+    output_dir: Path,
+    overwrite: bool = False,
+    limit_per_split: int | None = None,
+    seed: int = 42,
+    split_limits: dict[str, int] | None = None,
+) -> dict:
     archive_path = archive_path.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
+    if limit_per_split is not None and limit_per_split < 1:
+        raise ValueError("--limit-per-split must be a positive integer")
+    split_limits = split_limits or {}
+    if any(split not in SPLITS or count < 1 for split, count in split_limits.items()):
+        raise ValueError("per-split limits must use train/val/test and positive counts")
     if not archive_path.is_file():
         raise FileNotFoundError(f"Dataset archive not found: {archive_path}")
     if output_dir.exists() and any(output_dir.iterdir()):
@@ -64,7 +84,7 @@ def import_dataset(archive_path: Path, output_dir: Path, overwrite: bool = False
         shutil.rmtree(output_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary = {"images": {}, "boxes": {}, "empty_images": {}, "class_counts": {"garbage": 0}}
+    summary = {"images": {}, "boxes": {}, "empty_images": {}, "class_counts": {"garbage": 0}, "selected_files": {}}
     seen_names: set[str] = set()
 
     with ZipFile(archive_path) as archive:
@@ -78,6 +98,10 @@ def import_dataset(archive_path: Path, output_dir: Path, overwrite: bool = False
             )
             if not image_members:
                 raise ValueError(f"No images found for split '{split}' in archive")
+            split_limit = split_limits.get(split, limit_per_split)
+            if split_limit is not None and len(image_members) > split_limit:
+                image_members = sorted(random.Random(f"{seed}:{split}").sample(image_members, split_limit))
+            summary["selected_files"][split] = [PurePosixPath(name).name for name in image_members]
 
             image_dir = output_dir / "images" / split
             label_dir = output_dir / "labels" / split
@@ -123,6 +147,9 @@ def import_dataset(archive_path: Path, output_dir: Path, overwrite: bool = False
         "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
         "license_url": LICENSE_URL,
         "classes": ["garbage"],
+        "limit_per_split": limit_per_split,
+        "split_limits": split_limits,
+        "seed": seed,
     })
     (output_dir / "dataset_metadata.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(f"Imported {sum(summary['images'].values())} images and {sum(summary['boxes'].values())} boxes to {output_dir}")
@@ -133,7 +160,8 @@ def import_dataset(archive_path: Path, output_dir: Path, overwrite: bool = False
 def main() -> int:
     args = parse_args()
     try:
-        import_dataset(args.archive, args.output, args.overwrite)
+        split_limits = {split: getattr(args, f"limit_{split}") for split in SPLITS if getattr(args, f"limit_{split}") is not None}
+        import_dataset(args.archive, args.output, args.overwrite, args.limit_per_split, args.seed, split_limits)
     except Exception as exc:
         print(f"Import failed: {exc}")
         return 1
