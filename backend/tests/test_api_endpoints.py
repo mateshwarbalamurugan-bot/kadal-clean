@@ -122,6 +122,25 @@ def test_frame_analysis_endpoint_synthetic():
     assert "camera_motion" in data
 
 
+def test_static_image_disables_temporal_outputs():
+    img = np.zeros((120, 160, 3), dtype=np.uint8)
+    _, buf = cv2.imencode(".jpg", img)
+    b64_str = base64.b64encode(buf).decode("utf-8")
+    response = client.post("/api/analyze/frame", json={
+        "image_base64": f"data:image/jpeg;base64,{b64_str}",
+        "timestamp": 12346.0,
+        "is_static_image": True,
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tracked_objects"] == []
+    assert data["accumulation_summary"] is None
+    assert data["camera_motion"]["status"] == "unavailable"
+    assert data["wave_analysis"]["reliability"] == "insufficient_data"
+    assert any("Static image" in warning for warning in data["warnings"])
+
+
 def test_tracker_reset_endpoint():
     response = client.post("/api/tracker/reset")
     assert response.status_code == 200

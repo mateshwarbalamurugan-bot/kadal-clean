@@ -4,6 +4,8 @@ import AccumulationGrid from './AccumulationGrid';
 import TrajectoryCard from './TrajectoryCard';
 import ExperimentRecorder from './ExperimentRecorder';
 import ModelStatusCard from './ModelStatusCard';
+import WaveAnalysisCard from './WaveAnalysisCard';
+import TelemetryHistory from './TelemetryHistory';
 
 export default function AdvancedAnalysis({
   analysisData,
@@ -18,6 +20,9 @@ export default function AdvancedAnalysis({
   onStartRecording,
   onStopRecording,
   currentSession,
+  telemetryHistory,
+  manualWindDirection,
+  onUpdateManualWind,
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -43,6 +48,15 @@ export default function AdvancedAnalysis({
             <AccumulationGrid
               accumulationData={analysisData?.accumulation_summary}
             />
+
+            <WaveAnalysisCard
+              waveData={analysisData?.wave_analysis}
+              cameraMotion={analysisData?.camera_motion}
+              manualWind={manualWindDirection}
+              onUpdateManualWind={onUpdateManualWind}
+            />
+
+            <TelemetryHistory history={telemetryHistory || []} />
 
             <TrajectoryCard
               predictionMethod={predictionMethod}

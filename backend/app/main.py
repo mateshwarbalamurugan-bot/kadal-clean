@@ -3,6 +3,7 @@ Clean Kadal — FastAPI Backend
 AI-Based Floating Waste Detection and Water-Motion Analysis Research Service
 """
 import base64
+import os
 import time
 from typing import Dict, Any, List
 import cv2
@@ -20,7 +21,9 @@ from .schemas import (
     TrajectoryEvaluationResponse,
     AccumulationAnalysisRequest,
     AccumulationAnalysisResponse,
-    AccumulationTrackInput
+    AccumulationTrackInput,
+    CameraMotionEstimate,
+    WaveAnalysisResult,
 )
 from .model_loader import ModelManager
 from .detector import ObjectDetector
@@ -38,11 +41,19 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS configuration for local development and production deployments (e.g., Vercel)
+# Explicit browser origins; add an exact Vercel preview origin via ALLOWED_ORIGINS when needed.
+allowed_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "https://clean-kadal.vercel.app,http://localhost:3000,http://localhost:5173",
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -127,38 +138,64 @@ def analyze_frame(req: FrameAnalysisRequest) -> FrameAnalysisResponse:
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
     # 2. Run object detector
-    detections = detector.detect(img_bgr, conf_threshold=model_mgr.status.confidence_threshold)
+    confidence_threshold = (
+        req.confidence_threshold
+        if req.confidence_threshold is not None
+        else model_mgr.status.confidence_threshold
+    )
+    detections = detector.detect(img_bgr, conf_threshold=confidence_threshold)
     if not model_mgr.status.model_loaded:
         warnings.append("AI model not loaded. Detection is currently inactive.")
 
-    # 3. Estimate camera motion from stationary reference
-    camera_motion = camera_compensator.estimate_motion(gray, req.reference_region)
-    if camera_motion.warning:
-        warnings.append(camera_motion.warning)
+    if req.is_static_image:
+        # One still image has no temporal evidence for drift, waves, or track motion.
+        # Reset prior live history so a later camera session starts cleanly.
+        tracker.reset()
+        camera_compensator.reset()
+        wave_analyzer.reset()
+        camera_motion = CameraMotionEstimate(
+            status="unavailable",
+            warning="Static image: camera motion cannot be estimated from a single frame.",
+        )
+        wave_res = WaveAnalysisResult(
+            reliability="insufficient_data",
+            camera_compensation_status="unavailable",
+            disclaimer=(
+                "Static-image analysis has no temporal evidence; wave or current motion "
+                "was not estimated. Use consecutive live frames for optical-flow analysis."
+            ),
+        )
+        tracked_objects = []
+        warnings.append("Static image: temporal tracking, wave motion, and accumulation are unavailable.")
+    else:
+        # 3. Estimate camera motion from stationary reference
+        camera_motion = camera_compensator.estimate_motion(gray, req.reference_region)
+        if camera_motion.warning:
+            warnings.append(camera_motion.warning)
 
-    # 4. Analyze wave-pattern motion in water region
-    object_boxes = [d.box for d in detections]
-    wave_res = wave_analyzer.analyze(
-        current_gray=gray,
-        water_region=req.water_region,
-        object_boxes=object_boxes,
-        camera_motion=camera_motion,
-        manual_wind_direction=req.manual_wind_direction
-    )
+        # 4. Analyze wave-pattern motion in water region
+        object_boxes = [d.box for d in detections]
+        wave_res = wave_analyzer.analyze(
+            current_gray=gray,
+            water_region=req.water_region,
+            object_boxes=object_boxes,
+            camera_motion=camera_motion,
+            manual_wind_direction=req.manual_wind_direction
+        )
 
-    # 5. Update object tracker and compute trajectory projections
-    tracked_objects = tracker.update(
-        detections=detections,
-        timestamp=req.timestamp,
-        horizon_sec=req.prediction_horizon_sec,
-        prediction_method=req.prediction_method,
-        wave_vector=wave_res.vector if wave_res.reliability == "reliable" else None,
-        wave_reliability=wave_res.reliability
-    )
+        # 5. Update object tracker and compute trajectory forecasts
+        tracked_objects = tracker.update(
+            detections=detections,
+            timestamp=req.timestamp,
+            horizon_sec=req.prediction_horizon_sec,
+            prediction_method=req.prediction_method,
+            wave_vector=wave_res.vector if wave_res.reliability == "reliable" else None,
+            wave_reliability=wave_res.reliability
+        )
 
     # 6. Optional inline accumulation summary if tracks exist
     accum_summary = None
-    if tracker.active_tracks:
+    if tracker.active_tracks and not req.is_static_image:
         track_inputs = [
             AccumulationTrackInput(
                 track_id=t.track_id,

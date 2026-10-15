@@ -1,0 +1,6 @@
+Demo image attribution
+
+The file sample_floating_waste.jpg is one unmodified 640x640 image from Flow-Img version 3, dataset page:
+https://universe.roboflow.com/small-objects-5irpk/flow-img/dataset/3
+
+The dataset's included README.dataset.txt states: "Provided by a Roboflow user" and "License: CC BY 4.0". The image is included only as a clearly labeled demonstration fallback; it is not live footage or evidence of field performance. Attribution: Flow-Img dataset contributor (name not supplied in the archive), Flow-Img v3, Roboflow Universe, CC BY 4.0: https://creativecommons.org/licenses/by/4.0/.

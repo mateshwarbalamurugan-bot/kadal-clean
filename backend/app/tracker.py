@@ -131,40 +131,42 @@ class ObjectTracker:
 
     @staticmethod
     def _get_zone_name(x: float, y: float) -> str:
+        if x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0:
+            return "Outside Current Image Frame"
         if x < 0.33 and y < 0.33:
-            return "Top-Left Corner (NW)"
+            return "Top-Left Image Zone (NW)"
         elif x > 0.66 and y < 0.33:
-            return "Top-Right Corner (NE)"
+            return "Top-Right Image Zone (NE)"
         elif x < 0.33 and y > 0.66:
-            return "Bottom-Left Corner (SW)"
+            return "Bottom-Left Image Zone (SW)"
         elif x > 0.66 and y > 0.66:
-            return "Bottom-Right Corner (SE)"
+            return "Bottom-Right Image Zone (SE)"
         elif y < 0.25:
-            return "Top Wall / Hand-Wave Inflow (North)"
+            return "Top Image Band (N)"
         elif y > 0.75:
-            return "Bottom Wall (South)"
+            return "Bottom Image Band (S)"
         elif x < 0.25:
-            return "Left Wall (West)"
+            return "Left Image Band (W)"
         elif x > 0.75:
-            return "Right Wall (East)"
+            return "Right Image Band (E)"
         else:
-            return "Center Water Basin"
+            return "Center Image Zone"
 
     @staticmethod
     def _angle_to_compass(angle_deg: float) -> Tuple[str, str]:
         sectors = [
-            (22.5, 67.5, "SE", "South-East (Towards Bottom-Right)"),
-            (67.5, 112.5, "S", "South (Towards Bottom Wall)"),
-            (112.5, 157.5, "SW", "South-West (Towards Bottom-Left)"),
-            (157.5, 202.5, "W", "West (Towards Left Wall)"),
-            (202.5, 247.5, "NW", "North-West (Towards Top-Left)"),
-            (247.5, 292.5, "N", "North (Towards Top Wall)"),
-            (292.5, 337.5, "NE", "North-East (Towards Top-Right)"),
+            (22.5, 67.5, "SE", "down-right in image"),
+            (67.5, 112.5, "S", "down in image"),
+            (112.5, 157.5, "SW", "down-left in image"),
+            (157.5, 202.5, "W", "left in image"),
+            (202.5, 247.5, "NW", "up-left in image"),
+            (247.5, 292.5, "N", "up in image"),
+            (292.5, 337.5, "NE", "up-right in image"),
         ]
         for low, high, code, label in sectors:
             if low <= angle_deg < high:
                 return code, label
-        return "E", "East (Towards Right Wall)"
+        return "E", "right in image"
 
     def _apply_direction_semantics(self, track: TrackedObject, vx: float, vy: float, speed: float):
         x0 = track.history[0].x
@@ -182,7 +184,7 @@ class ObjectTracker:
         if dist_total >= 0.02:
             origin_angle = (math.degrees(math.atan2(-dy_total, -dx_total))) % 360.0
             code, label = self._angle_to_compass(origin_angle)
-            track.travelled_from = f"From {code} ({label.split('(')[0].strip()}) · Origin: {origin_zone}"
+            track.travelled_from = f"From {code} ({label}) · Origin zone: {origin_zone}"
         else:
             track.travelled_from = f"Originated at {origin_zone} (x={x0:.2f}, y={y0:.2f})"
 
@@ -194,10 +196,10 @@ class ObjectTracker:
             dest_zone = self._get_zone_name(
                 track.predicted_position[0], track.predicted_position[1]
             ) if track.predicted_position else "Ahead"
-            track.navigating_towards = f"Heading {code} ({label}) ➔ Towards {dest_zone}"
+            track.navigating_towards = f"Image direction {code} ({label}) ➔ Predicted image zone: {dest_zone}"
         else:
             track.heading_compass = "STATIONARY"
-            track.navigating_towards = f"Stationary / In-place drift within {origin_zone}"
+            track.navigating_towards = f"No clear image-space motion within {origin_zone}"
 
     def _create_track(
         self,

@@ -10,8 +10,13 @@ export default function LiveDemo({
   setCameraActive,
   isSampleMode,
   setIsSampleMode,
+  onClearAnalysis,
+  confidenceThreshold,
+  setConfidenceThreshold,
+  analysisTelemetry,
 }) {
   const videoRef = useRef(null);
+  const imageRef = useRef(null);
   const canvasRef = useRef(null);
   const overlayCanvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -21,6 +26,7 @@ export default function LiveDemo({
   const [videoInputs, setVideoInputs] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [isCameraSwitching, setIsCameraSwitching] = useState(false);
+  const inferenceInFlightRef = useRef(false);
 
   // Stop Webcam helper
   const stopWebcam = useCallback(() => {
@@ -55,11 +61,25 @@ export default function LiveDemo({
     stream?.getTracks().forEach((track) => track.stop());
   }, []);
 
+  useEffect(() => {
+    if (!cameraActive) return undefined;
+    const stream = videoRef.current?.srcObject;
+    if (!stream) return undefined;
+    const tracks = stream.getVideoTracks();
+    const onTrackEnded = () => {
+      stopWebcam();
+      setInternalError('Camera disconnected. Reconnect the webcam and start the camera again.');
+    };
+    tracks.forEach((track) => track.addEventListener('ended', onTrackEnded));
+    return () => tracks.forEach((track) => track.removeEventListener('ended', onTrackEnded));
+  }, [cameraActive, stopWebcam]);
+
   // Start Webcam
   const handleStartCamera = async (deviceId = selectedCameraId) => {
     setInternalError(null);
     setActiveImageSrc(null);
     setIsSampleMode(false);
+    onClearAnalysis();
     setIsCameraSwitching(true);
     let nextStream = null;
     const previousStream = videoRef.current?.srcObject;
@@ -148,7 +168,11 @@ export default function LiveDemo({
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         const base64Data = canvas.toDataURL('image/jpeg', 0.8);
-        onAnalyzeFrame(base64Data, false);
+        if (inferenceInFlightRef.current) return;
+        inferenceInFlightRef.current = true;
+        Promise.resolve(onAnalyzeFrame(base64Data, false))
+          .catch(() => {})
+          .finally(() => { inferenceInFlightRef.current = false; });
       }, 350); // ~3 FPS smooth stream analysis
     }
     return () => {
@@ -162,8 +186,9 @@ export default function LiveDemo({
     if (!file) return;
 
     stopWebcam();
-    setIsSampleMode(true);
+    setIsSampleMode(false);
     setInternalError(null);
+    onClearAnalysis();
 
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -181,10 +206,13 @@ export default function LiveDemo({
     stopWebcam();
     setIsSampleMode(true);
     setInternalError(null);
+    onClearAnalysis();
 
     try {
       const response = await fetch('/sample_floating_waste.jpg');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const blob = await response.blob();
+      if (!blob.type.startsWith('image/')) throw new Error('The sample asset is not an image.');
       const reader = new FileReader();
       reader.onload = (event) => {
         const dataUrl = event.target?.result;
@@ -197,53 +225,59 @@ export default function LiveDemo({
     }
   };
 
-  // Draw detection bounding boxes on canvas overlay
+  // Draw overlays within the same object-fit:contain content rectangle as the source media.
   useEffect(() => {
     const canvas = overlayCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
+    const viewport = canvas?.parentElement;
+    if (!canvas || !viewport) return undefined;
 
-    if (analysisData && analysisData.detections && analysisData.detections.length > 0) {
-      analysisData.detections.forEach((det, idx) => {
+    const draw = () => {
+      const w = Math.max(1, Math.floor(viewport.clientWidth));
+      const h = Math.max(1, Math.floor(viewport.clientHeight));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
+
+      const sourceWidth = cameraActive ? videoRef.current?.videoWidth : imageRef.current?.naturalWidth;
+      const sourceHeight = cameraActive ? videoRef.current?.videoHeight : imageRef.current?.naturalHeight;
+      const scale = sourceWidth > 0 && sourceHeight > 0
+        ? Math.min(w / sourceWidth, h / sourceHeight)
+        : 1;
+      const contentWidth = sourceWidth > 0 ? sourceWidth * scale : w;
+      const contentHeight = sourceHeight > 0 ? sourceHeight * scale : h;
+      const offsetX = (w - contentWidth) / 2;
+      const offsetY = (h - contentHeight) / 2;
+      const mapPoint = (x, y) => [offsetX + x * contentWidth, offsetY + y * contentHeight];
+
+      (analysisData?.detections || []).filter((det) => det.is_litter_candidate).forEach((det) => {
         const box = det.box;
-        const bx = box.x_min * w;
-        const by = box.y_min * h;
-        const bw = (box.x_max - box.x_min) * w;
-        const bh = (box.y_max - box.y_min) * h;
-
-        // Bounding box border
-        ctx.strokeStyle = '#14b8a6'; // Teal accent
+        const [bx, by] = mapPoint(box.x_min, box.y_min);
+        const bw = (box.x_max - box.x_min) * contentWidth;
+        const bh = (box.y_max - box.y_min) * contentHeight;
+        ctx.strokeStyle = '#14b8a6';
         ctx.lineWidth = 3;
         ctx.strokeRect(bx, by, bw, bh);
-
-        // Semi-transparent box fill
         ctx.fillStyle = 'rgba(20, 184, 166, 0.15)';
         ctx.fillRect(bx, by, bw, bh);
 
-        // Label Tag
         const labelText = `${det.class_name.replace('_', ' ')} · ${(det.confidence * 100).toFixed(0)}%`;
         ctx.font = 'bold 12px sans-serif';
         const textWidth = ctx.measureText(labelText).width;
-
         const tagHeight = 22;
         const tagY = Math.max(0, by - tagHeight);
         ctx.fillStyle = '#0f766e';
         ctx.fillRect(bx, tagY, textWidth + 12, tagHeight);
-
         ctx.fillStyle = '#ffffff';
         ctx.fillText(labelText, bx + 6, tagY + 15);
-        // Check if matching tracked object exists to show direction tag
-        const matchingTrack = analysisData?.tracked_objects?.find(
-          (t) => Math.abs(t.position[0] - (box.x_min + box.x_max) / 2) < 0.1 &&
-                 Math.abs(t.position[1] - (box.y_min + box.y_max) / 2) < 0.1
-        );
 
+        const centerX = (box.x_min + box.x_max) / 2;
+        const centerY = (box.y_min + box.y_max) / 2;
+        const matchingTrack = analysisData?.tracked_objects?.find((track) =>
+          Math.abs(track.position[0] - centerX) < 0.1 && Math.abs(track.position[1] - centerY) < 0.1
+        );
         if (matchingTrack) {
-          const fromCode = matchingTrack.heading_compass || 'ORIGIN';
-          const dirTag = `${matchingTrack.travelled_from?.split('·')[0]?.trim() || 'From Origin'} ➔ ${matchingTrack.navigating_towards?.split('➔')[0]?.trim() || 'Drifting'}`;
+          const dirTag = `${matchingTrack.travelled_from?.split('·')[0]?.trim() || 'Origin'} ➔ ${matchingTrack.navigating_towards?.split('➔')[0]?.trim() || 'Drifting'}`;
           ctx.font = '10px monospace';
           const dirTagWidth = ctx.measureText(dirTag).width;
           const dirTagY = by + bh + 4;
@@ -255,81 +289,48 @@ export default function LiveDemo({
           }
         }
       });
-    }
 
-    // Draw motion trails, origin entry points, and destination forecasts
-    if (analysisData && analysisData.tracked_objects && analysisData.tracked_objects.length > 0) {
-      analysisData.tracked_objects.forEach((obj) => {
-        // 1. Origin Entry Point (Travelled From)
+      (analysisData?.tracked_objects || []).forEach((obj) => {
         if (obj.origin_position) {
-          const ox = obj.origin_position[0] * w;
-          const oy = obj.origin_position[1] * h;
-
-          ctx.beginPath();
-          ctx.arc(ox, oy, 4, 0, 2 * Math.PI);
-          ctx.fillStyle = '#38bdf8'; // Sky blue origin
-          ctx.fill();
-
-          ctx.font = '9px sans-serif';
-          ctx.fillStyle = '#38bdf8';
-          ctx.fillText(`📍 Entry #${obj.track_id}`, ox + 6, oy - 2);
+          const [ox, oy] = mapPoint(obj.origin_position[0], obj.origin_position[1]);
+          ctx.beginPath(); ctx.arc(ox, oy, 4, 0, 2 * Math.PI); ctx.fillStyle = '#38bdf8'; ctx.fill();
+          ctx.font = '9px sans-serif'; ctx.fillStyle = '#38bdf8'; ctx.fillText(`Entry #${obj.track_id}`, ox + 6, oy - 2);
         }
-
-        // 2. Motion Trail Polyline
-        if (obj.history && obj.history.length > 1) {
-          ctx.beginPath();
-          ctx.strokeStyle = 'rgba(250, 204, 21, 0.85)'; // Yellow trail
-          ctx.lineWidth = 2;
-          obj.history.forEach((pt, i) => {
-            const hx = pt.x * w;
-            const hy = pt.y * h;
-            if (i === 0) ctx.moveTo(hx, hy);
-            else ctx.lineTo(hx, hy);
+        if (obj.history?.length > 1) {
+          ctx.beginPath(); ctx.strokeStyle = 'rgba(250, 204, 21, 0.85)'; ctx.lineWidth = 2;
+          obj.history.forEach((point, index) => {
+            const [x, y] = mapPoint(point.x, point.y);
+            if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
           });
           ctx.stroke();
         }
-
-        // 3. Velocity Vector Arrow (Navigating Towards)
         if (obj.velocity && obj.speed > 0.005) {
-          const cx = obj.position[0] * w;
-          const cy = obj.position[1] * h;
-          const tox = cx + obj.velocity[0] * 220;
-          const toy = cy + obj.velocity[1] * 220;
-
-          ctx.beginPath();
-          ctx.strokeStyle = '#facc15';
-          ctx.lineWidth = 2.5;
-          ctx.moveTo(cx, cy);
-          ctx.lineTo(tox, toy);
-          ctx.stroke();
-
-          // Arrowhead
+          const [cx, cy] = mapPoint(obj.position[0], obj.position[1]);
+          const tox = cx + obj.velocity[0] * contentWidth * 0.35;
+          const toy = cy + obj.velocity[1] * contentHeight * 0.35;
+          ctx.beginPath(); ctx.strokeStyle = '#facc15'; ctx.lineWidth = 2.5; ctx.moveTo(cx, cy); ctx.lineTo(tox, toy); ctx.stroke();
           const angle = Math.atan2(toy - cy, tox - cx);
-          ctx.beginPath();
-          ctx.fillStyle = '#facc15';
-          ctx.moveTo(tox, toy);
+          ctx.beginPath(); ctx.fillStyle = '#facc15'; ctx.moveTo(tox, toy);
           ctx.lineTo(tox - 7 * Math.cos(angle - Math.PI / 6), toy - 7 * Math.sin(angle - Math.PI / 6));
-          ctx.lineTo(tox - 7 * Math.cos(angle + Math.PI / 6), toy - 7 * Math.sin(angle + Math.PI / 6));
-          ctx.fill();
+          ctx.lineTo(tox - 7 * Math.cos(angle + Math.PI / 6), toy - 7 * Math.sin(angle + Math.PI / 6)); ctx.fill();
         }
-
-        // 4. Predicted Future Target (Destination)
         if (obj.predicted_position) {
-          const px = obj.predicted_position[0] * w;
-          const py = obj.predicted_position[1] * h;
-
-          ctx.beginPath();
-          ctx.arc(px, py, 5, 0, 2 * Math.PI);
-          ctx.fillStyle = '#f43f5e'; // Rose destination
-          ctx.fill();
-
-          ctx.font = '9px sans-serif';
-          ctx.fillStyle = '#f43f5e';
-          ctx.fillText(`🧭 Target #${obj.track_id}`, px + 7, py + 3);
+          const [px, py] = mapPoint(obj.predicted_position[0], obj.predicted_position[1]);
+          ctx.beginPath(); ctx.arc(px, py, 5, 0, 2 * Math.PI); ctx.fillStyle = '#f43f5e'; ctx.fill();
+          ctx.font = '9px sans-serif'; ctx.fillStyle = '#f43f5e'; ctx.fillText(`Target #${obj.track_id}`, px + 7, py + 3);
         }
       });
-    }
-  }, [analysisData]);
+    };
+
+    draw();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(draw) : null;
+    observer?.observe(viewport);
+    window.addEventListener('resize', draw);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', draw);
+    };
+  }, [analysisData, cameraActive, activeImageSrc]);
 
   const activeError = errorMessage || internalError;
 
@@ -337,8 +338,8 @@ export default function LiveDemo({
     <section id="demo" className="demo-section">
       <div className="section-header">
         <h2 className="section-title">Live AI Demonstration</h2>
-        <p className="section-subtitle">
-          Feed live camera video or test an image to detect floating waste in real time.
+          <p className="section-subtitle">
+          Analyze live camera frames or a still image. Detection is class-limited; motion estimates require consecutive frames.
         </p>
       </div>
 
@@ -402,12 +403,33 @@ export default function LiveDemo({
             {cameraActive && <span className="source-badge badge-live">● Live Camera Feed</span>}
             {!cameraActive && activeImageSrc && (
               <span className="source-badge badge-sample">
-                {isSampleMode ? '🧪 Demonstration Image' : '📁 Uploaded Image'}
+                {isSampleMode ? 'Licensed Dataset Sample · Not Live' : '📁 Uploaded Image'}
               </span>
             )}
             {!cameraActive && !activeImageSrc && (
               <span className="source-badge badge-idle">Ready to Start</span>
             )}
+          </div>
+        </div>
+
+        <div className="demo-telemetry-bar">
+          <label className="confidence-control" htmlFor="confidence-threshold">
+            <span>Minimum confidence: <strong>{Math.round(confidenceThreshold * 100)}%</strong></span>
+            <input
+              id="confidence-threshold"
+              type="range"
+              min="0.05"
+              max="0.95"
+              step="0.05"
+              value={confidenceThreshold}
+              onChange={(event) => setConfidenceThreshold(Number(event.target.value))}
+            />
+          </label>
+          <div className="analysis-telemetry" aria-live="polite">
+            <span>Model: <strong>{analysisData?.model_status?.model_name || 'Waiting for backend'}</strong></span>
+            <span>Inference: <strong>{analysisTelemetry?.latencyMs == null ? '—' : `${analysisTelemetry.latencyMs} ms`}</strong></span>
+            <span>Rate: <strong>{analysisTelemetry?.inferenceFps == null ? '—' : `${analysisTelemetry.inferenceFps} FPS`}</strong></span>
+            <span>Current candidates: <strong>{(analysisData?.detections || []).filter((item) => item.is_litter_candidate).length}</strong></span>
           </div>
         </div>
 
@@ -437,6 +459,7 @@ export default function LiveDemo({
           {/* Uploaded / Sample Static Image */}
           {!cameraActive && activeImageSrc && (
             <img
+              ref={imageRef}
               src={activeImageSrc}
               alt="Demo Frame"
               className="viewport-media"
@@ -494,7 +517,9 @@ export default function LiveDemo({
             </span>
           </div>
           <div className="footer-note">
-            Bounding boxes and labels are calculated directly by the lightweight YOLO detector.
+            {isSampleMode
+              ? <>Demo-only image from <a href="https://universe.roboflow.com/small-objects-5irpk/flow-img/dataset/3" target="_blank" rel="noreferrer">Flow-Img v3</a> (CC BY 4.0); not live footage or proof of field performance.</>
+              : 'Boxes show real model predictions. Direction and wave estimates require consecutive live frames.'}
           </div>
         </div>
       </div>

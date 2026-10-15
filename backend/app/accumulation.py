@@ -39,7 +39,7 @@ class AccumulationAnalyzer:
         for r in range(rows):
             row_cells = []
             for c in range(cols):
-                # Cells on perimeter are considered along walls/corners
+                # Perimeter cells are image-grid edges, not detected physical walls.
                 is_wall = (r == 0 or r == rows - 1 or c == 0 or c == cols - 1)
                 row_cells.append(AccumulationCell(
                     row=r,
@@ -142,7 +142,7 @@ class AccumulationAnalyzer:
 
                 if dwell_sec > max_dwell:
                     max_dwell = dwell_sec
-                    dominant_cell_name = f"Row {r+1}, Col {c+1} ({'Wall/Corner' if grid[r][c].is_corner_or_wall else 'Interior'})"
+                    dominant_cell_name = f"Row {r+1}, Col {c+1} ({'Image Edge' if grid[r][c].is_corner_or_wall else 'Interior Image Area'})"
 
         # Check sufficiency of experimental evidence
         if total_observations < 10 or len(req.tracks) < 1:

@@ -1,86 +1,53 @@
-﻿"""
-Clean Kadal -- Model Validation & Evaluation Script
-Evaluates model on the test split and reports per-class metrics:
-Precision, Recall, mAP@0.50, and mAP@0.50:0.95.
-"""
-import sys
+﻿"""Evaluate a YOLO checkpoint on a declared validation or held-out test split."""
 import argparse
+import sys
 from pathlib import Path
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Evaluate Clean Kadal detector on test set.")
-    parser.add_argument(
-        "--weights",
-        type=str,
-        default=str(Path(__file__).parent.parent / "models" / "custom_best.pt"),
-        help="Path to trained weights (default: models/custom_best.pt)"
-    )
-    parser.add_argument(
-        "--data",
-        type=str,
-        default=str(Path(__file__).parent / "dataset.yaml"),
-        help="Path to dataset.yaml"
-    )
-    parser.add_argument(
-        "--split",
-        type=str,
-        default="test",
-        help="Dataset split to evaluate ('test' or 'val')"
-    )
+    root = Path(__file__).resolve().parent.parent
+    parser = argparse.ArgumentParser(description="Evaluate a Clean Kadal detector on a YOLO dataset split.")
+    parser.add_argument("--weights", default=str(root / "models" / "clean_kadal_bottle_v2.pt"), help="Checkpoint to evaluate")
+    parser.add_argument("--data", default=str(Path(__file__).resolve().parent / "dataset.yaml"), help="Ultralytics dataset YAML")
+    parser.add_argument("--split", choices=("test", "val"), default="test", help="Use test only for final held-out reporting")
+    parser.add_argument("--imgsz", type=int, default=1024, help="Inference image size")
+    parser.add_argument("--device", default="cpu", help="Use cpu or a CUDA device such as 0")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    print("=" * 70)
-    print("Clean Kadal -- Model Evaluation & Metric Reporting")
-    print("=" * 70)
-    print(f"Model weights: {args.weights}")
-    print(f"Dataset config: {args.data}")
-    print(f"Split:          {args.split}")
-    print("=" * 70)
-
-    weights_path = Path(args.weights).resolve()
-    if not weights_path.exists():
-        print(f"[!] Model file not found at: {weights_path}")
-        print("    If you haven't trained a custom model yet, train it using:")
-        print("    python ai_training/train.py")
-        sys.exit(1)
-
+    weights = Path(args.weights).resolve()
+    data = Path(args.data).resolve()
+    if not weights.is_file():
+        print(f"[!] Model checkpoint not found: {weights}")
+        return 2
+    if not data.is_file():
+        print(f"[!] Dataset YAML not found: {data}")
+        return 2
     try:
         from ultralytics import YOLO
+        model = YOLO(str(weights))
+        metrics = model.val(data=str(data), split=args.split, imgsz=args.imgsz, device=args.device, verbose=True)
     except ImportError:
-        print("[!] Ultralytics library not found in Python environment.")
-        sys.exit(1)
+        print("[!] Ultralytics is missing. Install backend/requirements.txt first.")
+        return 2
+    except Exception as exc:
+        print(f"[!] Evaluation failed: {exc}")
+        return 1
 
-    model = YOLO(str(weights_path))
-
-    print("[*] Running evaluation on test split...")
-    metrics = model.val(
-        data=str(Path(args.data).resolve()),
-        split=args.split,
-        verbose=True
-    )
-
-    print("\n" + "=" * 70)
-    print("DETECTION PERFORMANCE REPORT")
-    print("=" * 70)
-    print(f"Overall mAP@0.50:      {metrics.box.map50:.4f}")
-    print(f"Overall mAP@0.50:0.95: {metrics.box.map:.4f}")
-    print(f"Overall Precision:     {metrics.box.mp:.4f}")
-    print(f"Overall Recall:        {metrics.box.mr:.4f}")
-    print("=" * 70)
-
-    # Class-wise metrics if available
-    if hasattr(metrics.box, "maps") and metrics.box.maps is not None:
-        print("Per-Class mAP@0.50:0.95:")
-        for idx, cls_name in enumerate(model.names.values()):
-            if idx < len(metrics.box.maps):
-                print(f"  - {cls_name:20s}: {metrics.box.maps[idx]:.4f}")
+    print("\nDETECTION PERFORMANCE REPORT")
+    print(f"Checkpoint: {weights}")
+    print(f"Dataset: {data} | split={args.split} | imgsz={args.imgsz} | device={args.device}")
+    print(f"Precision:    {metrics.box.mp:.4f}")
+    print(f"Recall:       {metrics.box.mr:.4f}")
+    print(f"mAP@0.50:     {metrics.box.map50:.4f}")
+    print(f"mAP@0.50:0.95:{metrics.box.map:.4f}")
+    for index, name in enumerate(model.names.values()):
+        if index < len(metrics.box.maps):
+            print(f"mAP@0.50:0.95 {name}: {metrics.box.maps[index]:.4f}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-
-
+    sys.exit(main())

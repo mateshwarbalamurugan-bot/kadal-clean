@@ -1,160 +1,125 @@
-﻿"""
-Clean Kadal -- Custom AI Model Training Script
-Fine-tunes a lightweight nano YOLO detector (transfer learning) on floating-waste data.
-Saves best checkpoint, exports evaluation metrics, and places best weights into models/custom_best.pt.
-"""
-import os
-import sys
+﻿"""Fine-tune the Clean Kadal bottle detector without replacing the baseline."""
 import argparse
 import shutil
+import sys
 from pathlib import Path
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Fine-tune YOLO detector for Clean Kadal floating waste detection."
-    )
-    parser.add_argument(
-        "--data",
-        type=str,
-        default=str(Path(__file__).parent / "dataset.yaml"),
-        help="Path to dataset.yaml"
-    )
-    parser.add_argument(
-        "--weights",
-        type=str,
-        default="yolov8n.pt",
-        help="Pretrained baseline weights to fine-tune from (e.g. yolov8n.pt)"
-    )
-    parser.add_argument(
-        "--epochs",
-        type=int,
-        default=50,
-        help="Number of training epochs (default: 50)"
-    )
-    parser.add_argument(
-        "--batch",
-        type=int,
-        default=16,
-        help="Batch size (default: 16; use 8 if low GPU/CPU memory)"
-    )
-    parser.add_argument(
-        "--imgsz",
-        type=int,
-        default=640,
-        help="Input image resolution (default: 640)"
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cpu",
-        help="Device to train on ('cpu' or '0' for CUDA GPU)"
-    )
-    parser.add_argument(
-        "--project",
-        type=str,
-        default=str(Path(__file__).parent / "runs"),
-        help="Directory to save training run logs and checkpoints"
-    )
-    parser.add_argument(
-        "--name",
-        type=str,
-        default="clean_kadal_custom",
-        help="Run name"
-    )
+    project_root = Path(__file__).resolve().parent.parent
+    parser = argparse.ArgumentParser(description="Fine-tune a YOLO detector for Clean Kadal.")
+    parser.add_argument("--data", default=str(Path(__file__).resolve().parent / "dataset.yaml"), help="Ultralytics dataset YAML")
+    parser.add_argument("--weights", default=str(project_root / "models" / "clean_kadal_bottle_v2.pt"), help="Starting checkpoint")
+    parser.add_argument("--epochs", type=int, default=50, help="Maximum training epochs")
+    parser.add_argument("--batch", type=int, default=8, help="Batch size")
+    parser.add_argument("--imgsz", type=int, default=1024, help="Square training image size")
+    parser.add_argument("--device", default="cpu", help="Use cpu or a CUDA device such as 0")
+    parser.add_argument("--project", default=str(Path(__file__).resolve().parent / "runs"), help="Ultralytics run directory")
+    parser.add_argument("--name", default="clean_kadal_candidate", help="Training-run name")
+    parser.add_argument("--output-weights", default=str(project_root / "models" / "clean_kadal_bottle_candidate.pt"), help="Candidate output path; baseline is never overwritten")
     return parser.parse_args()
+
+
+def split_paths(config, split, dataset_root):
+    value = config.get(split)
+    if not value:
+        return []
+    entries = value if isinstance(value, list) else [value]
+    return [Path(entry) if Path(entry).is_absolute() else dataset_root / entry for entry in entries]
+
+
+def count_images(paths, dataset_root):
+    count = 0
+    for path in paths:
+        if path.is_dir():
+            count += sum(item.suffix.lower() in IMAGE_EXTENSIONS for item in path.rglob("*"))
+        elif path.is_file() and path.suffix.lower() in {".txt", ".csv"}:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                item = line.strip()
+                if not item or item.startswith("#"):
+                    continue
+                candidate = Path(item)
+                candidate = candidate if candidate.is_absolute() else dataset_root / candidate
+                count += int(candidate.suffix.lower() in IMAGE_EXTENSIONS and candidate.is_file())
+        elif path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+            count += 1
+    return count
 
 
 def main():
     args = parse_args()
-    print("=" * 70)
-    print("Clean Kadal -- Custom AI Model Training Pipeline")
-    print("=" * 70)
-    print(f"Dataset config: {args.data}")
-    print(f"Base weights:   {args.weights}")
-    print(f"Epochs:         {args.epochs}")
-    print(f"Batch size:     {args.batch}")
-    print(f"Image size:     {args.imgsz}")
-    print(f"Device:         {args.device}")
-    print("=" * 70)
+    if args.epochs < 1 or args.batch < 1 or args.imgsz < 320:
+        print("[!] epochs and batch must be positive; imgsz must be at least 320.")
+        return 2
 
-    # 1. Validate dataset existence
     data_yaml = Path(args.data).resolve()
-    if not data_yaml.exists():
-        print(f"[!] Error: Dataset configuration file not found at: {data_yaml}")
-        sys.exit(1)
+    weights = Path(args.weights).resolve()
+    if not data_yaml.is_file():
+        print(f"[!] Dataset YAML not found: {data_yaml}")
+        return 2
+    if not weights.is_file():
+        print(f"[!] Starting weights not found: {weights}")
+        print("    Copy clean_kadal_bottle_v2.pt into models/ or pass --weights.")
+        return 2
 
-    # 2. Check if train images exist
-    dataset_dir = data_yaml.parent.parent / "datasets" / "images" / "train"
-    train_images = list(dataset_dir.glob("*.jpg")) + list(dataset_dir.glob("*.png"))
-    if not train_images:
-        print(f"[!] Error: No training images found in: {dataset_dir}")
-        print("    Please collect boat-camera images, label them in datasets/labels/train,")
-        print("    and verify them using: python ai_training/check_dataset.py")
-        sys.exit(1)
+    try:
+        import yaml
+        config = yaml.safe_load(data_yaml.read_text(encoding="utf-8-sig")) or {}
+    except Exception as exc:
+        print(f"[!] Cannot parse dataset YAML: {exc}")
+        return 2
 
-    print(f"[OK] Found {len(train_images)} training images. Starting Ultralytics YOLO training...\n")
+    dataset_root = Path(config.get("path") or data_yaml.parent)
+    if not dataset_root.is_absolute():
+        dataset_root = (data_yaml.parent / dataset_root).resolve()
+    train_paths = split_paths(config, "train", dataset_root)
+    val_paths = split_paths(config, "val", dataset_root)
+    train_count = count_images(train_paths, dataset_root)
+    val_count = count_images(val_paths, dataset_root)
+    if not train_count or not val_count:
+        print(f"[!] Training requires readable train and val images. Found train={train_count}, val={val_count}.")
+        print(f"    Dataset root: {dataset_root}; train paths: {train_paths}; val paths: {val_paths}")
+        print("    Run check_dataset.py first. Keep the test split untouched until final evaluation.")
+        return 2
+
+    print("Clean Kadal YOLO fine-tuning preflight")
+    print(f"  Dataset: {data_yaml}")
+    print(f"  Classes: {config.get('names', 'not listed')}")
+    print(f"  Images: train={train_count}, val={val_count}")
+    print(f"  Starting weights: {weights}")
+    print(f"  Device / epochs / batch / imgsz: {args.device} / {args.epochs} / {args.batch} / {args.imgsz}")
+    print("  Output: candidate checkpoint; the baseline file will not be overwritten.")
 
     try:
         from ultralytics import YOLO
+        model = YOLO(str(weights))
+        model.train(
+            data=str(data_yaml), epochs=args.epochs, batch=args.batch,
+            imgsz=args.imgsz, device=args.device, project=args.project,
+            name=args.name, exist_ok=True, pretrained=True, optimizer="auto",
+            verbose=True, degrees=10.0, flipud=0.0, fliplr=0.5,
+            mosaic=1.0, hsv_h=0.015, hsv_s=0.7, hsv_v=0.4,
+        )
     except ImportError:
-        print("[!] Error: Ultralytics library not found in Python environment.")
-        print("    Please run: pip install ultralytics torch torchvision")
-        sys.exit(1)
+        print("[!] Ultralytics is missing. Install backend/requirements.txt first.")
+        return 2
+    except Exception as exc:
+        print(f"[!] Training failed: {exc}")
+        return 1
 
-    # 3. Load lightweight pretrained model for transfer learning
-    try:
-        model = YOLO(args.weights)
-    except Exception as e:
-        print(f"[!] Error loading base weights '{args.weights}': {e}")
-        print("    Internet connection is required on first run to download pretrained weights.")
-        sys.exit(1)
-
-    # 4. Execute fine-tuning
-    results = model.train(
-        data=str(data_yaml),
-        epochs=args.epochs,
-        batch=args.batch,
-        imgsz=args.imgsz,
-        device=args.device,
-        project=args.project,
-        name=args.name,
-        exist_ok=True,
-        pretrained=True,
-        optimizer="auto",
-        verbose=True,
-        # Domain augmentations
-        degrees=10.0,
-        flipud=0.0,
-        fliplr=0.5,
-        mosaic=1.0,
-        hsv_h=0.015,
-        hsv_s=0.7,
-        hsv_v=0.4
-    )
-
-    # 5. Check and copy best weights
-    best_weights = Path(args.project) / args.name / "weights" / "best.pt"
-    models_dir = Path(__file__).parent.parent / "models"
-    models_dir.mkdir(parents=True, exist_ok=True)
-    target_custom_weights = models_dir / "custom_best.pt"
-
-    if best_weights.exists():
-        shutil.copy2(best_weights, target_custom_weights)
-        print("\n" + "=" * 70)
-        print("[OK] TRAINING COMPLETED SUCCESSFULLY!")
-        print(f"[OK] Best checkpoint saved to: {best_weights}")
-        print(f"[OK] Deployed custom model to: {target_custom_weights}")
-        print("=" * 70)
-        print("Next steps:")
-        print("  1. Validate model metrics:  python ai_training/validate.py")
-        print("  2. Export model for deploy: python ai_training/export_model.py")
-        print("  3. Restart or reload Clean Kadal backend to load your custom model.")
-    else:
-        print(f"\n[!] Training finished, but best.pt was not found at {best_weights}")
+    best_weights = Path(args.project).resolve() / args.name / "weights" / "best.pt"
+    if not best_weights.is_file():
+        print(f"[!] Training ended but best.pt was not found: {best_weights}")
+        return 1
+    output_weights = Path(args.output_weights).resolve()
+    output_weights.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(best_weights, output_weights)
+    print(f"[OK] Candidate checkpoint saved: {output_weights}")
+    print("Next: validate on an untouched test set, compare with the baseline, then export only if the candidate is better.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-
-
+    sys.exit(main())

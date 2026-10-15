@@ -27,6 +27,9 @@ ENV/
 datasets/images/
 datasets/raw_captures/
 datasets/labels/
+datasets/local-split/
+datasets/flow-img-v3/
+datasets/*.zip
 
 # Node.js
 node_modules/
