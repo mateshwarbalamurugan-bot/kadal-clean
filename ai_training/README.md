@@ -1,124 +1,53 @@
-# Clean Kadal — AI Model Training & Dataset Pipeline
+# Clean Kadal — marine-litter model training
 
-This directory contains the complete pipeline for training, validating, and exporting a custom lightweight computer vision detector for floating waste and debris.
+The current custom detector is fine-tuned to recognize **one class: `garbage`**, using floating-litter images of water surfaces. The labels do **not** distinguish bottles, cups, wrappers, bags, caps, or plastic from organic debris. The six-class `dataset.yaml` remains a template for a future manually annotated dataset; it is not the model currently being deployed.
 
----
+## Current model data source
 
-## 1. Target Object Categories
+The reproducible public source is Lazzerini, Ferreira & Ridolfi, *Floating Marine Litter Dataset*, SEANOE (2025), [dataset record](https://www.seanoe.org/data/00950/106148/), [DOI 10.17882/106148](https://doi.org/10.17882/106148). The record declares **CC BY 4.0**. The v2 archive contains official train/validation/test YOLO splits, with a single `garbage` category. Keep the required attribution with derived weights; do not commit the multi-gigabyte archive or extracted dataset.
 
-The model is trained on 6 specific physical classes:
+## Prepare the dataset
 
-| Class ID | Class Name | Description | Status in Interface |
-|---|---|---|---|
-| `0` | `plastic_bottle` | PET water/soft-drink bottles | Potential litter candidate |
-| `1` | `plastic_cup` | Disposable plastic or styrofoam cups | Potential litter candidate |
-| `2` | `plastic_wrapper` | Food snack wrappers, cellophane | Potential litter candidate |
-| `3` | `plastic_bag` | Thin polythene carry bags | Potential litter candidate |
-| `4` | `bottle_cap` | Small plastic caps | Potential litter candidate |
-| `5` | `leaf` | Natural plant leaves, organic surface debris | Natural debris (non-litter) |
+1. Download the V2 archive (`data/120969.zip`) from the dataset record.
+2. Import and validate the official splits:
 
-> **Important Distinction**: In the baseline (unfine-tuned) YOLOv8n-COCO detector, only generic `bottle` and `cup` classes exist. Clean Kadal **never** pretends a generic model is the custom Clean Kadal model. When running the baseline, labels are shown as `bottle` or `cup` and flagged as "potential litter candidate". Only after fine-tuning this custom pipeline will the specific classes above be recognized.
-
----
-
-## 2. Dataset Collection Workflow (From Your Boat-Mounted Camera)
-
-1. Mount your USB webcam onto your stationary boat model in the rectangular water tub.
-2. Angle the camera looking **forward and downward** toward the water surface ahead of the boat.
-3. Record distinct video clips (sessions) under different lighting conditions and with manual waves generated from different sides of the tub:
-   - `session_01_morning_flat_water.mp4`
-   - `session_02_morning_hand_waves_left.mp4`
-   - `session_03_afternoon_hand_waves_right.mp4`
-   - `session_04_shaded_mixed_waste.mp4`
-4. Extract frames at ~1 frame per second (avoid extracting 30 identical frames per second):
-   ```powershell
-   # Using ffmpeg or OpenCV
-   ffmpeg -i session_01.mp4 -r 1 datasets/raw_captures/session1_frame_%04d.jpg
+   ```bash
+   python ai_training/import_fml_dataset.py --archive /path/to/120969.zip
+   python ai_training/check_dataset.py --data ai_training/dataset_fml.yaml
    ```
-5. Place all captured frames inside `datasets/raw_captures/`.
 
----
+The importer writes images and labels to `datasets/fml_v2/`, verifies normalized YOLO boxes, records attribution metadata, and preserves the publisher's split boundaries. To reproduce the smaller, deterministic CPU development subset, pass `--limit-train 500 --limit-val 100 --limit-test 100 --seed 42 --overwrite` to the import command. The selected image names and sample settings are recorded in `dataset_metadata.json`.
 
-## 3. Image Annotation
+## Train and validate
 
-Use open-source annotation tools:
-- **CVAT** (Computer Vision Annotation Tool, local or web)
-- **LabelImg** (standalone local tool: `pip install labelImg`)
-- **Roboflow** (web interface, export as YOLOv8 PyTorch format)
+Install the training dependencies (the backend itself does not need to change):
 
-Ensure classes match the exact 0-5 indices:
-- Format: `class_id x_center y_center width height` (all normalized between 0.0 and 1.0).
-
----
-
-## 4. Preventing Data Leakage Across Splits
-
-Consecutive video frames from the same recording session look nearly identical. If frame 12 is in training and frame 13 is in testing, test metrics will be artificially inflated and invalid.
-
-Use our session-aware splitter:
-```powershell
-.\venv\Scripts\python.exe ai_training/split_dataset.py
+```bash
+python -m pip install ultralytics torch torchvision pyyaml
 ```
-This script assigns whole recording sessions (e.g. Session 1 & 2 to `train`, Session 3 to `val`, Session 4 to `test`), ensuring real-world test evaluation.
 
----
+Fine-tune the nano model and evaluate on the untouched test split:
 
-## 5. Dataset Verification
+```bash
+python ai_training/train.py \
+  --data ai_training/dataset_fml.yaml \
+  --weights yolov8n.pt \
+  --epochs 30 --batch 8 --imgsz 640 --device 0
 
-Run the dataset integrity checker:
-```powershell
-.\venv\Scripts\python.exe ai_training/check_dataset.py
+python ai_training/validate.py \
+  --weights models/custom_best.pt \
+  --data ai_training/dataset_fml.yaml \
+  --split test
 ```
-This script checks:
-- Image readability (corrupted files).
-- Missing annotation `.txt` files.
-- Out-of-bounds coordinates ($<0$ or $>1$).
-- Class instance balance.
-- Emits an alert if dataset has fewer than 50 images.
 
----
+Use `--device cpu` on CPU-only machines and reduce `--batch` if memory is limited. `train.py` resolves dataset paths from the YAML, supports an early-stopping patience, and copies the best checkpoint to `models/custom_best.pt`. `check_dataset.py` validates every declared split and prints class counts.
 
-## 6. Training (Transfer Learning)
+## Add material-specific classes
 
-Fine-tune the lightweight YOLOv8 nano model starting from pretrained weights:
-```powershell
-.\venv\Scripts\python.exe ai_training/train.py --epochs 50 --batch 16 --imgsz 640 --device cpu
-```
-*(If you have an NVIDIA GPU, pass `--device 0`).*
+To teach `plastic_bottle`, `plastic_bag`, `wrapper`, etc., collect representative camera footage, annotate each object with the intended taxonomy, and create a matching YOLO dataset YAML. Split entire recording sessions—not adjacent frames—across train/validation/test. Do not relabel the current generic `garbage` boxes as specific plastic types; the source does not provide those labels.
 
-When training completes:
-- Training metrics and confusion matrices are saved to `ai_training/runs/clean_kadal_custom/`.
-- The best checkpoint is automatically copied to `models/custom_best.pt`.
+## Deployment
 
----
+The backend prefers `models/custom_best.pt` to the general COCO baseline and exposes the active class list at `/api/model/status`. It reports inference failures as warnings rather than silently treating model errors as successful no-detection frames. After updating weights on an already running backend, call `POST /api/model/reload`; normal GitHub-to-Render deployment loads the checkpoint on startup.
 
-## 7. Model Validation
-
-Evaluate the trained model on unseen test sessions:
-```powershell
-.\venv\Scripts\python.exe ai_training/validate.py
-```
-Reports overall and per-class Precision, Recall, mAP@50, and mAP@50:95.
-
----
-
-## 8. Exporting for Deployment
-
-Export the trained model to ONNX:
-```powershell
-.\venv\Scripts\python.exe ai_training/export_model.py
-```
-The script:
-1. Converts `custom_best.pt` to ONNX format.
-2. Places `custom_best.onnx` into `models/`.
-3. **Runs actual test inference** to verify the exported file works before confirming success.
-
----
-
-## 9. Reloading in Clean Kadal Application
-
-Once `models/custom_best.pt` or `models/custom_best.onnx` exists:
-- Clean Kadal backend automatically loads it on startup.
-- If the backend is already running, click **"Reload Model"** in the web dashboard or make a request to `POST /api/model/reload`.
-- The interface will immediately switch status to:
-  **"Clean Kadal Custom Detector (Custom-Trained Model Active)"** and display the 6 floating-waste classes.
+For dataset citation, model limitations, and deployment notes, see [`docs/MARINE_DETECTOR.md`](../docs/MARINE_DETECTOR.md).

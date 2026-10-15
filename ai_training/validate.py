@@ -5,6 +5,7 @@ Precision, Recall, mAP@0.50, and mAP@0.50:0.95.
 """
 import sys
 import argparse
+import tempfile
 from pathlib import Path
 
 
@@ -54,14 +55,28 @@ def main():
         print("[!] Ultralytics library not found in Python environment.")
         sys.exit(1)
 
+    try:
+        import yaml
+        dataset_yaml = Path(args.data).expanduser().resolve()
+        config = yaml.safe_load(dataset_yaml.read_text(encoding="utf-8")) or {}
+        root = Path(config.get("path", ".")).expanduser()
+        if not root.is_absolute():
+            root = (dataset_yaml.parent / root).resolve()
+        config["path"] = str(root)
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as temp_file:
+            yaml.safe_dump(config, temp_file, sort_keys=False)
+            runtime_data_yaml = Path(temp_file.name)
+    except Exception as exc:
+        print(f"[!] Could not resolve dataset configuration: {exc}")
+        sys.exit(1)
+
     model = YOLO(str(weights_path))
 
-    print("[*] Running evaluation on test split...")
-    metrics = model.val(
-        data=str(Path(args.data).resolve()),
-        split=args.split,
-        verbose=True
-    )
+    print("[*] Running evaluation on the requested split...")
+    try:
+        metrics = model.val(data=str(runtime_data_yaml), split=args.split, verbose=True)
+    finally:
+        runtime_data_yaml.unlink(missing_ok=True)
 
     print("\n" + "=" * 70)
     print("DETECTION PERFORMANCE REPORT")
@@ -82,5 +97,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 

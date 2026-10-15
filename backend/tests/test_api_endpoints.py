@@ -164,6 +164,27 @@ def test_frame_analysis_rejects_declared_mime_that_does_not_match_bytes():
     assert "does not match the image bytes" in response.json()["detail"]
 
 
+def test_frame_analysis_reports_model_inference_failure(monkeypatch):
+    from backend.app import main as api_main
+
+    image = np.zeros((32, 32, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".jpg", image)
+    assert ok
+
+    def fail_inference(*args, **kwargs):
+        raise RuntimeError("YOLO inference failed")
+
+    monkeypatch.setattr(api_main.detector, "detect", fail_inference)
+    response = client.post("/api/analyze/frame", json={
+        "image_base64": "data:image/jpeg;base64," + base64.b64encode(encoded).decode("ascii"),
+        "timestamp": 12345.0,
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["detections"] == []
+    assert any("Object detection inference failed" in warning for warning in data["warnings"])
+
+
 def test_tracker_reset_endpoint():
     response = client.post("/api/tracker/reset")
     assert response.status_code == 200

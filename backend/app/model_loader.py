@@ -8,14 +8,7 @@ import os
 from typing import List, Optional, Tuple, Any
 from .schemas import ModelStatus
 
-CUSTOM_CLASSES = [
-    "plastic_bottle",
-    "plastic_cup",
-    "plastic_wrapper",
-    "plastic_bag",
-    "bottle_cap",
-    "leaf"
-]
+CUSTOM_CLASSES = ["garbage"]
 
 # Baseline COCO classes that are considered potential litter candidates
 COCO_LITTER_CANDIDATE_CLASSES = {"bottle", "cup"}
@@ -52,6 +45,7 @@ class ModelManager:
         custom_pt = os.path.join(self.models_dir, "custom_best.pt")
         custom_onnx = os.path.join(self.models_dir, "custom_best.onnx")
         baseline_pt = os.path.join(self.models_dir, "yolov8n.pt")
+        custom_load_error = None
 
         try:
             from ultralytics import YOLO
@@ -74,37 +68,47 @@ class ModelManager:
                 self.model = YOLO(custom_pt)
                 # Read names from model
                 names = list(self.model.names.values()) if hasattr(self.model, "names") else CUSTOM_CLASSES
+                is_marine_litter = "garbage" in {name.lower() for name in names}
                 self.status = ModelStatus(
                     model_loaded=True,
-                    model_name="Clean Kadal Custom Detector",
+                    model_name=("Clean Kadal Marine-Litter Detector" if is_marine_litter else "Clean Kadal Custom Detector"),
                     model_type="custom_trained",
                     is_custom_trained=True,
                     supported_classes=names,
                     weights_path=custom_pt,
                     device="cpu",
-                    status_message="Custom Clean Kadal floating waste model loaded successfully."
+                    status_message=(
+                        "Custom marine-litter detector loaded. It detects floating garbage candidates as one class; "
+                        "it does not classify bottle/bag/material subtypes."
+                        if is_marine_litter else "Custom Clean Kadal detector loaded successfully."
+                    )
                 )
                 return self.status
             except Exception as e:
-                pass
+                custom_load_error = f"custom_best.pt could not be loaded: {e}"
 
         if os.path.exists(custom_onnx):
             try:
                 self.model = YOLO(custom_onnx)
                 names = list(self.model.names.values()) if hasattr(self.model, "names") else CUSTOM_CLASSES
+                is_marine_litter = "garbage" in {name.lower() for name in names}
                 self.status = ModelStatus(
                     model_loaded=True,
-                    model_name="Clean Kadal Custom ONNX Detector",
+                    model_name=("Clean Kadal Marine-Litter ONNX Detector" if is_marine_litter else "Clean Kadal Custom ONNX Detector"),
                     model_type="custom_trained",
                     is_custom_trained=True,
                     supported_classes=names,
                     weights_path=custom_onnx,
                     device="cpu",
-                    status_message="Custom Clean Kadal ONNX floating waste model loaded successfully."
+                    status_message=(
+                        "Custom marine-litter ONNX detector loaded. It detects floating garbage candidates as one class; "
+                        "it does not classify bottle/bag/material subtypes."
+                        if is_marine_litter else "Custom Clean Kadal ONNX detector loaded successfully."
+                    )
                 )
                 return self.status
             except Exception as e:
-                pass
+                custom_load_error = f"custom_best.onnx could not be loaded: {e}"
 
         # 2. Check or download baseline YOLOv8n detector
         target_baseline = baseline_pt if os.path.exists(baseline_pt) else "yolov8n.pt"
@@ -120,10 +124,9 @@ class ModelManager:
                 weights_path=str(target_baseline),
                 device="cpu",
                 status_message=(
-                    "Pretrained COCO baseline loaded. Custom model not yet trained or not available. "
-                    "Detects generic 'bottle' and 'cup' as potential litter candidates only. "
-                    "Train custom model using ai_training/ to enable floating waste classes "
-                    "(plastic_bottle, plastic_wrapper, plastic_bag, bottle_cap, leaf)."
+                    "Pretrained COCO baseline loaded; it recognizes general COCO objects, not marine-specific waste. "
+                    "Train the surface-litter model with ai_training/import_fml_dataset.py and ai_training/train.py. "
+                    + (f"Custom checkpoint warning: {custom_load_error}" if custom_load_error else "")
                 )
             )
             return self.status

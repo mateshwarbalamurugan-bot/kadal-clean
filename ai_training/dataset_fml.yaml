@@ -1,0 +1,8 @@
+# Floating Marine Litter Dataset v2 (SEANOE). Download/import it with import_fml_dataset.py.
+# The official annotations provide one class: garbage (not bottle/bag/material subtypes).
+path: ../datasets/fml_v2
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: garbage

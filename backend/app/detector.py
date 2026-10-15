@@ -31,8 +31,10 @@ class ObjectDetector:
                 conf=conf_threshold,
                 verbose=False
             )
-        except Exception:
-            return []
+        except Exception as exc:
+            # Surface inference failures to the API layer; an empty list must not
+            # silently masquerade as a successful no-detection result.
+            raise RuntimeError("YOLO inference failed") from exc
 
         detections: List[Detection] = []
         is_custom = self.manager.status.is_custom_trained
@@ -62,8 +64,12 @@ class ObjectDetector:
 
                 # Evaluate potential litter candidate flag
                 if is_custom:
-                    # In custom model, plastic waste classes are litter candidates, leaf is natural debris
-                    is_litter = (class_name in ("plastic_bottle", "plastic_cup", "plastic_wrapper", "plastic_bag", "bottle_cap"))
+                    # The current marine dataset uses one `garbage` class. It is a
+                    # candidate label, not a material/subtype classification.
+                    is_litter = class_name.lower() in {
+                        "plastic_bottle", "plastic_cup", "plastic_wrapper",
+                        "plastic_bag", "bottle_cap", "garbage", "marine_debris",
+                    }
                 else:
                     # In generic baseline COCO model, bottle and cup are potential litter candidates
                     is_litter = (class_name.lower() in COCO_LITTER_CANDIDATE_CLASSES)

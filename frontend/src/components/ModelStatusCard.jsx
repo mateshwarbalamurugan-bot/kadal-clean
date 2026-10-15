@@ -37,7 +37,7 @@ export default function ModelStatusCard({ modelStatus, onReloadModel }) {
           <span className="detail-label">Model Provenance:</span>
           <span className="detail-value">
             {isCustom ? (
-              <span className="badge badge-success">Custom-Trained Clean Kadal Model</span>
+              <span className="badge badge-success">Custom-Trained Marine-Litter Model</span>
             ) : (
               <span className="badge badge-warning">Generic Pretrained Baseline (COCO)</span>
             )}
@@ -66,7 +66,7 @@ export default function ModelStatusCard({ modelStatus, onReloadModel }) {
             <span
               key={i}
               className={`chip ${
-                cls.includes('bottle') || cls.includes('cup') || cls.includes('wrapper') || cls.includes('bag')
+                cls.includes('bottle') || cls.includes('cup') || cls.includes('wrapper') || cls.includes('bag') || cls === 'garbage'
                   ? 'chip-litter'
                   : 'chip-default'
               }`}
@@ -86,8 +86,13 @@ export default function ModelStatusCard({ modelStatus, onReloadModel }) {
         <h4>Physical & Algorithmic Limitations:</h4>
         <ul>
           <li>
-            <strong>Baseline vs Custom:</strong> The COCO baseline detector only recognizes generic <code>bottle</code> and <code>cup</code>.
-            Plastic wrappers, plastic bags, bottle caps, and leaves require training via <code>ai_training/train.py</code>.
+            {isCustom ? (
+              <><strong>Custom class scope:</strong> The current marine model detects one generic <code>garbage</code> class.
+                It does not distinguish bottles, bags, wrappers, or plastic from organic material; those categories need their own verified annotations.</>
+            ) : (
+              <><strong>Baseline vs custom:</strong> COCO is a general-object baseline, not a marine-waste detector.
+                Use the documented FML dataset workflow in <code>ai_training/</code> to train the surface-litter model.</>
+            )}
           </li>
           <li>
             <strong>Camera Bobbing:</strong> Uncompensated camera motion will skew optical surface flow. Always designate a stationary tub rim region.

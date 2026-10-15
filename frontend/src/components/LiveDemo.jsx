@@ -53,12 +53,29 @@ export default function LiveDemo({
   const canvasRef = useRef(null);
   const overlayCanvasRef = useRef(null);
   const fileInputRef = useRef(null);
+  const inferenceInProgressRef = useRef(false);
+  const analysisCallbackRef = useRef(onAnalyzeFrame);
 
   const [activeImageSrc, setActiveImageSrc] = useState(null);
   const [internalError, setInternalError] = useState(null);
   const [videoInputs, setVideoInputs] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [isCameraSwitching, setIsCameraSwitching] = useState(false);
+  const [overlayDimensions, setOverlayDimensions] = useState({ width: 640, height: 360 });
+
+  useEffect(() => {
+    analysisCallbackRef.current = onAnalyzeFrame;
+  }, [onAnalyzeFrame]);
+
+  const syncOverlayDimensions = useCallback((width, height) => {
+    const overlay = overlayCanvasRef.current;
+    if (!overlay || !width || !height) return;
+    if (overlay.width !== width) overlay.width = width;
+    if (overlay.height !== height) overlay.height = height;
+    setOverlayDimensions((current) => (
+      current.width === width && current.height === height ? current : { width, height }
+    ));
+  }, []);
 
   // Stop Webcam helper
   const stopWebcam = useCallback(() => {
@@ -194,27 +211,52 @@ export default function LiveDemo({
     stopWebcam();
   };
 
-  // Periodic capture loop when camera is active
+  // Keep at most one inference request in flight. Render backends can be CPU-bound;
+  // queueing webcam frames faster than inference completes makes overlays stale.
   useEffect(() => {
-    let intervalId = null;
-    if (cameraActive) {
-      intervalId = setInterval(() => {
-        if (!videoRef.current || !canvasRef.current || videoRef.current.readyState < 2) return;
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (!cameraActive) return undefined;
+    let active = true;
+    let timeoutId;
 
-        const base64Data = canvas.toDataURL('image/jpeg', 0.8);
-        onAnalyzeFrame(base64Data, false);
-      }, 350); // ~3 FPS smooth stream analysis
-    }
-    return () => {
-      if (intervalId) clearInterval(intervalId);
+    const analyzeNextFrame = async () => {
+      if (!active) return;
+      const video = videoRef.current;
+      const captureCanvas = canvasRef.current;
+      if (!video || !captureCanvas || video.readyState < 2 || !video.videoWidth || !video.videoHeight || inferenceInProgressRef.current) {
+        timeoutId = window.setTimeout(analyzeNextFrame, 300);
+        return;
+      }
+
+      const scale = Math.min(1, 960 / Math.max(video.videoWidth, video.videoHeight));
+      const width = Math.max(1, Math.round(video.videoWidth * scale));
+      const height = Math.max(1, Math.round(video.videoHeight * scale));
+      captureCanvas.width = width;
+      captureCanvas.height = height;
+      const context = captureCanvas.getContext('2d');
+      if (!context) {
+        timeoutId = window.setTimeout(analyzeNextFrame, 500);
+        return;
+      }
+      context.drawImage(video, 0, 0, width, height);
+      syncOverlayDimensions(width, height);
+
+      inferenceInProgressRef.current = true;
+      try {
+        await analysisCallbackRef.current(captureCanvas.toDataURL('image/jpeg', 0.82), false);
+      } catch (error) {
+        console.error('Camera frame analysis failed:', error);
+      } finally {
+        inferenceInProgressRef.current = false;
+        if (active) timeoutId = window.setTimeout(analyzeNextFrame, 500);
+      }
     };
-  }, [cameraActive, onAnalyzeFrame]);
+
+    timeoutId = window.setTimeout(analyzeNextFrame, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [cameraActive, syncOverlayDimensions]);
 
   // Handle Image Upload
   const handleFileUpload = async (e) => {
@@ -396,7 +438,7 @@ export default function LiveDemo({
         }
       });
     }
-  }, [analysisData]);
+  }, [analysisData, overlayDimensions]);
 
   const activeError = errorMessage || internalError;
 
@@ -498,6 +540,7 @@ export default function LiveDemo({
             playsInline
             muted
             className="viewport-media"
+            onLoadedMetadata={(event) => syncOverlayDimensions(event.currentTarget.videoWidth, event.currentTarget.videoHeight)}
             style={{ display: cameraActive ? 'block' : 'none' }}
           />
 
@@ -507,6 +550,7 @@ export default function LiveDemo({
               src={activeImageSrc}
               alt="Demo Frame"
               className="viewport-media"
+              onLoad={(event) => syncOverlayDimensions(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
             />
           )}
 
@@ -535,10 +579,10 @@ export default function LiveDemo({
           {/* Canvas for AI Overlays */}
           <canvas
             ref={overlayCanvasRef}
-            width={640}
-            height={480}
+            width={overlayDimensions.width}
+            height={overlayDimensions.height}
             className="viewport-overlay-canvas"
-            style={{ display: (cameraActive || activeImageSrc) ? 'block' : 'none' }}
+            style={{ display: (cameraActive || activeImageSrc) ? 'block' : 'none', objectFit: 'contain' }}
           />
 
           {/* Processing Spinner Overlay */}

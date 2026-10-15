@@ -1,48 +1,20 @@
-# Clean Kadal — Custom Model Training Pipeline
+# Clean Kadal — Model Training
 
-## 1. Overview
+## Current production target
 
-Clean Kadal uses transfer learning on top of Ultralytics YOLOv8 nano (`yolov8n.pt`).
-Training from random weights is avoided because floating-waste datasets collected in college projects are typically small (100–500 images). Pretrained feature representations of edges, textures, and contours drastically accelerate convergence.
+The current custom model is a single-class floating-marine-litter detector (`garbage`) trained from a public water-surface dataset. It does not distinguish bottles, bags, wrappers, or material type. The historic six-class YAML is a template only; class-specific predictions require properly labelled examples for each class.
 
----
+## Reproduce training
 
-## 2. Command-Line Training Workflow (Windows)
+See [`ai_training/README.md`](../ai_training/README.md) for the current dataset import, integrity checks, fine-tuning, held-out validation, and deployment steps. The full procedure and dataset attribution are in [`MARINE_DETECTOR.md`](MARINE_DETECTOR.md).
 
-Ensure your virtual environment is active:
-```powershell
-.\venv\Scripts\Activate.ps1
+The key commands are:
+
+```bash
+python ai_training/import_fml_dataset.py --archive /path/to/120969.zip
+python ai_training/check_dataset.py --data ai_training/dataset_fml.yaml
+python ai_training/train.py --data ai_training/dataset_fml.yaml --epochs 30 --batch 8 --imgsz 640 --device 0
+python ai_training/validate.py --weights models/custom_best.pt --data ai_training/dataset_fml.yaml --split test
 ```
 
-### Step 1: Check Dataset Integrity
-```powershell
-python ai_training/check_dataset.py
-```
-Ensures all labels are valid and reports class frequencies.
-
-### Step 2: Fine-Tune the Model
-```powershell
-python ai_training/train.py --epochs 50 --batch 16 --imgsz 640 --device cpu
-```
-*Note: If your laptop has an NVIDIA GPU with CUDA, specify `--device 0`.*
-
-### Step 3: Evaluate on Unseen Test Split
-```powershell
-python ai_training/validate.py
-```
-Reports per-class Precision, Recall, and mAP@50:95.
-
-### Step 4: Export and Verify Model
-```powershell
-python ai_training/export_model.py
-```
-This exports the model to ONNX, places `models/custom_best.onnx` in the models directory, and runs a test inference pass to verify the export before confirming success.
-
----
-
-## 3. Integrating with Clean Kadal
-
-Once `custom_best.pt` or `custom_best.onnx` is located in `models/`:
-1. Start or switch to the Clean Kadal dashboard.
-2. Click **Reload Model Weights** in the AI Model Card.
-3. The dashboard will update from `Baseline COCO` to `Clean Kadal Custom Detector`, enabling the 6 floating-waste classes.
+The importer preserves the dataset publisher's train/validation/test boundaries. A custom checkpoint is placed at `models/custom_best.pt`, which the backend prefers to its generic pretrained baseline at startup. Avoid evaluating on training frames; validate on footage from the intended camera before operational use.

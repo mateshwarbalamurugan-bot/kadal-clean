@@ -1,25 +1,27 @@
 # Clean Kadal — Dataset Collection and Annotation Guide
 
-## 1. Directory Structure
+## Current model versus future labels
 
+The current custom model is trained on floating marine litter with a single class, `garbage`. It does not distinguish a bottle from a bag, wrapper, cap, or organic material. The six-class taxonomy below is only a proposed schema for a future model trained on newly annotated images. The public FML dataset's generic labels must not be relabeled as these specific categories.
+
+For the current model's source dataset, importer, license, and reproducible commands, see [`MARINE_DETECTOR.md`](MARINE_DETECTOR.md) and [`../ai_training/README.md`](../ai_training/README.md).
+
+## Suggested future annotation folders
+
+For locally captured, subtype-labeled footage, organize images and YOLO labels into disjoint splits:
+
+```text
+datasets/custom/
+├── images/{train,val,test}/
+└── labels/{train,val,test}/
 ```
-datasets/
-├── raw_captures/          <-- Place raw video frame captures here
-│   ├── session_01/        <-- Subfolders for session isolation
-│   └── session_02/
-├── images/
-│   ├── train/             <-- Train split images (.jpg)
-│   ├── val/               <-- Validation split images (.jpg)
-│   └── test/              <-- Test split images (.jpg)
-└── labels/
-    ├── train/             <-- Train annotations (.txt in YOLO format)
-    ├── val/               <-- Validation annotations (.txt)
-    └── test/              <-- Test annotations (.txt)
-```
 
-## 2. Target Classes
+Use whole recording sessions or camera setups as split groups. Never place adjacent frames from the same recording in both training and test sets. Keep raw captures separately and do not commit them to Git.
 
-Ensure all annotations adhere strictly to the 6 target categories:
+## Suggested future taxonomy
+
+Use this mapping only if annotators can reliably distinguish each category and the dataset YAML is configured with the matching names and IDs:
+
 - `0`: `plastic_bottle`
 - `1`: `plastic_cup`
 - `2`: `plastic_wrapper`
@@ -27,37 +29,26 @@ Ensure all annotations adhere strictly to the 6 target categories:
 - `4`: `bottle_cap`
 - `5`: `leaf`
 
-## 3. YOLO Annotation Format
+A class's presence in this list does not mean the current model recognizes it. Consider whether `leaf` is a useful debris class for the intended application, and include a separate `other_floating_debris` class only when there are enough reviewed examples.
 
-Each bounding box is represented in a single line inside a `.txt` file with identical stem to its corresponding image:
-```
+## YOLO annotation format
+
+Each image has a matching `.txt` file with the same basename. Each non-empty line is:
+
+```text
 <class_id> <x_center> <y_center> <width> <height>
 ```
-All 4 coordinates must be normalized to $[0.0, 1.0]$:
+
+Coordinates are normalized to `[0.0, 1.0]`; width and height must be greater than zero. Empty label files represent verified images with no annotated target.
+
+## Prevent data leakage and verify labels
+
+Split full sessions, dates, or camera configurations rather than randomly splitting adjacent frames. Inspect box placement and category consistency before training. Run the checker against the YAML for the specific dataset:
+
+```bash
+python ai_training/check_dataset.py --data ai_training/dataset_fml.yaml
+# Or, for a separately prepared six-class dataset:
+python ai_training/check_dataset.py --data ai_training/dataset.yaml
 ```
-0 0.4521 0.6120 0.1240 0.2100
-5 0.7812 0.3204 0.0890 0.0760
-```
 
-## 4. Preventing Data Leakage
-
-Never use random frame-level shuffling for video data!
-If you extract 30 frames per second, frames $t$ and $t+1$ are identical. A random split would place frame $t$ into training and $t+1$ into testing, giving a false 99% test accuracy that fails completely in the real world.
-
-Always use:
-```powershell
-.\venv\Scripts\python.exe ai_training/split_dataset.py
-```
-This script splits whole recording sessions or camera angles, preserving true testing independence.
-
-## 5. Integrity Verification
-
-Always run before training:
-```powershell
-.\venv\Scripts\python.exe ai_training/check_dataset.py
-```
-This script verifies:
-- Uncorrupted JPEG/PNG files.
-- Matching `.txt` files.
-- Bounding box coordinates within $[0, 1]$.
-- Distribution of instances across all 6 classes.
+The checker decodes each image, verifies a matching label file, validates class IDs against that YAML, and rejects malformed or out-of-range boxes.
