@@ -1,6 +1,6 @@
 # Clean Kadal — marine-litter model training
 
-The current custom detector is fine-tuned to recognize **one class: `garbage`**, using floating-litter images of water surfaces. The labels do **not** distinguish bottles, cups, wrappers, bags, caps, or plastic from organic debris. The six-class `dataset.yaml` remains a template for a future manually annotated dataset; it is not the model currently being deployed.
+The current custom detector is fine-tuned to recognize **one class: `garbage`**, using floating-litter images of water surfaces plus one supplemental manually labeled project demo frame. The labels do **not** distinguish bottles, cups, wrappers, bags, caps, or plastic from organic debris. The six-class `dataset.yaml` remains a template for a future manually annotated dataset; it is not the model currently being deployed.
 
 ## Current model data source
 
@@ -13,6 +13,7 @@ The reproducible public source is Lazzerini, Ferreira & Ridolfi, *Floating Marin
 
    ```bash
    python ai_training/import_fml_dataset.py --archive /path/to/120969.zip
+   python ai_training/add_demo_sample.py
    python ai_training/check_dataset.py --data ai_training/dataset_fml.yaml
    ```
 

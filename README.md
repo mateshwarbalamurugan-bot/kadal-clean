@@ -135,12 +135,13 @@ cd ..
 
 ## 6. Training the Custom Marine-Litter Model
 
-The current custom detector is trained to recognize one generic floating-litter class, `garbage`. It does not identify bottles, cups, wrappers, bags, caps, or material types. Those six-class labels in `ai_training/dataset.yaml` are a template for a future, separately annotated dataset—not capabilities of the deployed model.
+The current custom detector recognizes one generic floating-litter class, `garbage`. It does not identify bottles, cups, wrappers, bags, caps, or material types. The training run also uses one supplemental, manually annotated project demo frame with three garbage boxes. Those six-class labels in `ai_training/dataset.yaml` are a template for a future, separately annotated dataset—not capabilities of the deployed model.
 
 To reproduce the current training pipeline, download the Floating Marine Litter V2 archive from the [official dataset record](https://www.seanoe.org/data/00950/106148/), import its published splits, validate annotations, then fine-tune and evaluate:
 
 ```bash
-python ai_training/import_fml_dataset.py --archive /path/to/120969.zip
+python ai_training/import_fml_dataset.py --archive /path/to/120969.zip --limit-train 500 --limit-val 100 --limit-test 100 --seed 42
+python ai_training/add_demo_sample.py
 python ai_training/check_dataset.py --data ai_training/dataset_fml.yaml
 python ai_training/train.py --data ai_training/dataset_fml.yaml --epochs 30 --batch 8 --imgsz 640 --device 0
 python ai_training/validate.py --weights models/custom_best.pt --data ai_training/dataset_fml.yaml --split test

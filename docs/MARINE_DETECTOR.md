@@ -2,7 +2,7 @@
 
 ## What the deployed custom model detects
 
-The custom model is fine-tuned for floating marine litter on water surfaces. The public training source supplies **one object class, `garbage`**. It does not label bottles, bags, wrappers, caps, or material composition separately. Therefore the detector can identify floating-garbage candidates and draw boxes, but it cannot truthfully report a waste subtype. Add locally captured, manually reviewed, class-specific annotations before promising subtype classification.
+The custom model is fine-tuned for floating marine litter on water surfaces. The public training source supplies **one object class, `garbage`**. It does not label bottles, bags, wrappers, caps, or material composition separately. The current development run also includes one supplemental, manually annotated project demo frame with three visible litter boxes. The detector can identify floating-garbage candidates and draw boxes, but it cannot truthfully report a waste subtype. Add more locally captured, manually reviewed, class-specific annotations before promising subtype classification.
 
 The model is a transfer-learning baseline, not a claim of field certification. Detection performance varies with camera angle, water reflections, distance, lighting, target size, and differences between the source imagery and a deployed webcam. Review the held-out metrics and validate on the actual camera before operational use.
 
@@ -15,23 +15,17 @@ The model is a transfer-learning baseline, not a claim of field certification. D
 ## Prepare and train
 
 1. Download the V2 ZIP (`data/120969.zip`) from the SEANOE record.
-2. Import its official train/validation/test splits:
+2. Import its official train/validation/test splits. For a small reproducible CPU run, use the seeded per-split limits shown here; omit the limits to import the full dataset:
 
    ```bash
-   python ai_training/import_fml_dataset.py --archive /path/to/120969.zip
-   ```
-
-3. Validate the imported annotations and train a small YOLOv8 model:
-
-   ```bash
+   python ai_training/import_fml_dataset.py --archive /path/to/120969.zip --limit-train 500 --limit-val 100 --limit-test 100 --seed 42
+   python ai_training/add_demo_sample.py
    python ai_training/check_dataset.py --data ai_training/dataset_fml.yaml
-   python ai_training/train.py \
-     --data ai_training/dataset_fml.yaml \
-     --weights yolov8n.pt \
-     --epochs 30 --batch 8 --imgsz 640 --device 0
+   python ai_training/train.py --data ai_training/dataset_fml.yaml --weights yolov8n.pt --epochs 30 --batch 8 --imgsz 640 --device 0
+   python ai_training/validate.py --weights models/custom_best.pt --data ai_training/dataset_fml.yaml --split test
    ```
 
-   Use `--device cpu` on a CPU-only machine and lower `--batch` if memory is limited. Training creates `models/custom_best.pt`. The project backend prefers this custom checkpoint over its generic COCO baseline. Validate using `python ai_training/validate.py --help` to see the current validation CLI and the same FML YAML.
+   Use `--device cpu` on a CPU-only machine and lower `--batch` if memory is limited. The supplemental image is already part of the public frontend assets; its one-class annotation is tracked at `ai_training/annotations/website_sample_floating_waste.txt`. The importer records the seeded selected filenames and the supplemental example in local metadata. Training creates `models/custom_best.pt`; the backend prefers this checkpoint over its generic COCO baseline.
 
 The importer keeps the source's official split boundaries and checks every normalized YOLO box. `datasets/fml_v2/` is local training data and is ignored by Git.
 
