@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -37,7 +38,7 @@ def split_directory(root: Path, config: dict, split: str) -> Path:
 
 
 def check_split(image_dir: Path, names: list[str]) -> dict:
-    label_dir = Path(str(image_dir).replace(f"{Path.sep}images{Path.sep}", f"{Path.sep}labels{Path.sep}"))
+    label_dir = Path(str(image_dir).replace(f"{os.sep}images{os.sep}", f"{os.sep}labels{os.sep}"))
     stats = {"images": 0, "labels": 0, "missing_labels": 0, "corrupt_images": 0,
              "corrupt_labels": 0, "box_errors": 0, "class_counts": Counter()}
     if not image_dir.is_dir():
