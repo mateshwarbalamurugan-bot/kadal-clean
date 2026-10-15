@@ -5,6 +5,7 @@ its best checkpoint to models/custom_best.pt for backend auto-loading.
 """
 import argparse
 import os
+import random
 import shutil
 import sys
 import tempfile
@@ -81,6 +82,15 @@ def main():
     except Exception as exc:
         raise SystemExit(f"Dataset check failed: {exc}") from exc
 
+    train_list_path = None
+    if args.fraction < 1.0:
+        sample_count = max(1, round(len(train_images) * args.fraction))
+        train_images = sorted(random.Random(args.seed).sample(train_images, sample_count))
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as train_list:
+            train_list.write("\n".join(str(image.resolve()) for image in train_images) + "\n")
+            train_list_path = Path(train_list.name)
+        config["train"] = str(train_list_path)
+
     print("=" * 70)
     print("Clean Kadal -- Custom Marine-Litter YOLO Training")
     print("=" * 70)
@@ -116,7 +126,8 @@ def main():
             workers=args.workers,
             patience=args.patience,
             seed=args.seed,
-            fraction=args.fraction,
+            # A fractional train subset is sampled with the declared seed above.
+            fraction=1.0,
             project=str(Path(args.project).expanduser().resolve()),
             name=args.name,
             exist_ok=True,
@@ -134,6 +145,8 @@ def main():
         )
     finally:
         runtime_data_yaml.unlink(missing_ok=True)
+        if train_list_path:
+            train_list_path.unlink(missing_ok=True)
 
     run_dir = Path(args.project).expanduser().resolve() / args.name
     best_weights = run_dir / "weights" / "best.pt"
