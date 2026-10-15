@@ -54,7 +54,7 @@ export default function App() {
       } catch (err) {
         if (isMounted) {
           setBackendConnected(false);
-          setErrorMessage('AI Backend is starting or offline. Ensure backend is running.');
+          setErrorMessage(err.message || 'AI Backend is starting or offline. Ensure backend is running.');
         }
       }
     }
