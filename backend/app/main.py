@@ -166,8 +166,12 @@ def analyze_frame(req: FrameAnalysisRequest) -> FrameAnalysisResponse:
 
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-    # 2. Run object detector
-    detections = detector.detect(img_bgr, conf_threshold=model_mgr.status.confidence_threshold)
+    # 2. Run object detector and make runtime failures visible to the client.
+    try:
+        detections = detector.detect(img_bgr, conf_threshold=model_mgr.status.confidence_threshold)
+    except Exception as e:
+        detections = []
+        warnings.append(f"Object detection inference failed: {str(e)}")
     if not model_mgr.status.model_loaded:
         warnings.append("AI model not loaded. Detection is currently inactive.")
 

@@ -3,10 +3,16 @@ import React from 'react';
 export default function ResultsSection({ analysisData, isSampleMode }) {
   const detections = analysisData?.detections || [];
   const trackedObjects = analysisData?.tracked_objects || [];
-  const wasteCount = detections.length;
+  const litterDetections = detections.filter((d) => d.is_litter_candidate);
+  const wasteCount = litterDetections.length;
+  const isMarineGarbageModel = (analysisData?.model_status?.supported_classes || [])
+    .some((name) => String(name).toLowerCase() === 'garbage');
+  const modelWarnings = (analysisData?.warnings || []).filter((warning) =>
+    /Object detection inference failed|AI model not loaded/i.test(warning)
+  );
 
   // Extract unique waste classes
-  const uniqueClasses = Array.from(new Set(detections.map((d) => d.class_name)));
+  const uniqueClasses = Array.from(new Set(litterDetections.map((d) => d.class_name)));
 
   // Accumulation assessment from backend analysis
   const accumSummary = analysisData?.accumulation_summary;
@@ -48,20 +54,27 @@ export default function ResultsSection({ analysisData, isSampleMode }) {
         </p>
       </div>
 
+      {modelWarnings.length > 0 && (
+        <div className="demo-alert" role="alert">
+          <span className="alert-icon">⚠️</span>
+          <span className="alert-text">{modelWarnings.join(' ')}</span>
+        </div>
+      )}
+
       {/* Primary Overview Cards */}
       <div className="results-grid">
-        {/* Card 1: Waste Detected */}
+        {/* Card 1: Litter / floating-garbage candidates */}
         <div className="result-card">
           <div className="result-card-header">
             <span className="card-icon">🗑️</span>
             <span className="card-badge">{wasteCount > 0 ? 'Active' : 'Standby'}</span>
           </div>
           <div className="result-value">{wasteCount}</div>
-          <div className="result-title">Waste Detected</div>
+          <div className="result-title">{isMarineGarbageModel ? 'Floating Garbage Candidates' : 'Waste Detected'}</div>
           <div className="result-description">
             {wasteCount === 1
-              ? '1 floating waste candidate detected in view'
-              : `${wasteCount} floating waste items detected in view`}
+              ? '1 floating-litter candidate detected in view'
+              : `${wasteCount} floating-litter candidates detected in view`}
           </div>
         </div>
 
@@ -82,9 +95,11 @@ export default function ResultsSection({ analysisData, isSampleMode }) {
               <span className="type-chip-none">No categories identified yet</span>
             )}
           </div>
-          <div className="result-title">Waste Types</div>
+          <div className="result-title">{isMarineGarbageModel ? 'Detected Category' : 'Waste Types'}</div>
           <div className="result-description">
-            Categories recognized by loaded lightweight detector
+            {isMarineGarbageModel
+              ? 'The trained model has one generic garbage class; it does not infer bottle, bag, or material subtypes.'
+              : 'Litter-candidate categories recognized by the loaded detector'}
           </div>
         </div>
 

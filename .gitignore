@@ -19,6 +19,7 @@ ENV/
 
 # PyTorch / model weights (large files)
 *.pt
+!models/custom_best.pt
 *.pth
 *.onnx
 *.engine
@@ -27,6 +28,9 @@ ENV/
 datasets/images/
 datasets/raw_captures/
 datasets/labels/
+datasets/fml_v2/
+datasets/iwhr_floater/
+ai_training/runs/
 
 # Node.js
 node_modules/
