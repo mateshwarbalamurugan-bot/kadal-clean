@@ -10,3 +10,5 @@ services:
         value: 3.10.0
       - key: PORT
         value: 10000
+      - key: CORS_ORIGINS
+        value: https://clean-kadal.vercel.app,http://localhost:5173,http://127.0.0.1:5173
