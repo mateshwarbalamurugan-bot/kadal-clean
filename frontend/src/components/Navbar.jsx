@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function Navbar({ backendConnected, isCustomModel }) {
+export default function Navbar({ backendConnected, isCustomModel, isBrowserModelReady, isBrowserModelLoading }) {
   const scrollTo = (id) => {
     const el = document.getElementById(id);
     if (el) {
@@ -23,11 +23,15 @@ export default function Navbar({ backendConnected, isCustomModel }) {
         </nav>
 
         <div className="navbar-status">
-          <span className={`status-indicator ${backendConnected ? 'online' : 'offline'}`}>
+          <span className={`status-indicator ${backendConnected || isBrowserModelReady || isBrowserModelLoading ? 'online' : 'offline'}`}>
             <span className="status-dot"></span>
-            {backendConnected
-              ? (isCustomModel ? 'Custom AI Model Online' : 'Baseline AI Engine Online')
-              : 'AI Engine Offline'}
+            {isBrowserModelReady
+              ? 'Browser AI Online'
+              : isBrowserModelLoading
+                ? 'Loading Browser AI'
+                : backendConnected
+                  ? (isCustomModel ? 'Custom AI Model Online' : 'Server AI Online')
+                  : 'Browser AI Ready'}
           </span>
         </div>
       </div>

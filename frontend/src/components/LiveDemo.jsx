@@ -54,6 +54,7 @@ export default function LiveDemo({
   analysisTelemetry,
   modelStatus,
   backendConnected,
+  browserModelLoading,
 }) {
   const videoRef = useRef(null);
   const imageRef = useRef(null);
@@ -244,7 +245,7 @@ export default function LiveDemo({
         Promise.resolve(onAnalyzeFrame(base64Data, false))
           .catch(() => {})
           .finally(() => { inferenceInFlightRef.current = false; });
-      }, 250); // Capture at most ~1.1 FPS; keep cloud CPU and memory load bounded.
+      }, 250); // Capture at most ~1.1 FPS to keep browser compute and memory bounded.
     }
     return () => {
       if (intervalId) clearInterval(intervalId);
@@ -415,7 +416,7 @@ export default function LiveDemo({
       <div className="section-header">
         <h2 className="section-title">Live AI Demonstration</h2>
           <p className="section-subtitle">
-          Hold the bottle fully in frame and move it steadily. Live tracking needs consecutive camera frames; a still image only confirms the object.
+          Bottle detection runs locally in your browser. It reports bottles and cups only; the built-in river sample may not contain a detectable bottle. Keep your bottle fully visible and move it steadily for motion tracking.
         </p>
       </div>
 
@@ -502,7 +503,7 @@ export default function LiveDemo({
             />
           </label>
           <div className="analysis-telemetry" aria-live="polite">
-            <span>Model: <strong>{analysisData?.model_status?.model_name || modelStatus?.model_name || (backendConnected ? 'Connected · waiting for first frame' : 'Waiting for backend')}</strong></span>
+            <span>Model: <strong>{analysisData?.model_status?.model_name || (browserModelLoading ? 'Loading browser detector…' : modelStatus?.model_name || (backendConnected ? 'Ready · waiting for first frame' : 'Ready when you start camera or sample'))}</strong></span>
             <span>Inference: <strong>{analysisTelemetry?.latencyMs == null ? '—' : `${analysisTelemetry.latencyMs} ms`}</strong></span>
             <span>Rate: <strong>{analysisTelemetry?.inferenceFps == null ? '—' : `${analysisTelemetry.inferenceFps} FPS`}</strong></span>
             <span>Current candidates: <strong>{(analysisData?.detections || []).filter((item) => item.is_litter_candidate).length}</strong></span>

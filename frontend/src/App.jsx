@@ -11,15 +11,16 @@ import {
   checkBackendHealth,
   getModelStatus,
   reloadModelWeights,
-  sendFrameForAnalysis,
-  resetBackendTracker,
 } from './services/api';
+import { detectInBrowser, resetBrowserTracker } from './services/browserDetector';
 
 import './App.css';
 
 export default function App() {
   const [backendConnected, setBackendConnected] = useState(false);
   const [modelStatus, setModelStatus] = useState(null);
+  const [browserModelReady, setBrowserModelReady] = useState(false);
+  const [browserModelLoading, setBrowserModelLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -62,7 +63,8 @@ export default function App() {
       } catch (err) {
         if (isMounted) {
           setBackendConnected(false);
-          setErrorMessage(err.message || 'AI Backend is starting or offline. Ensure backend is running.');
+          // Browser-local bottle inference remains available if the hosted API is offline.
+          setModelStatus(null);
         }
       }
     }
@@ -74,8 +76,8 @@ export default function App() {
     };
   }, []);
 
-  // Frame Analysis Handler (called by LiveDemo on camera frames or still images).
-  // Never queue multiple CPU inference requests; a live frame is dropped while one is active.
+  // Run bottle detection in the user's browser; live analysis must not depend on the
+  // low-memory hosted API, which can be restarted by repeated PyTorch inference.
   const handleAnalyzeFrame = useCallback(
     async (base64Image, isStaticImage = false) => {
       if (!isStaticImage && frameRequestActiveRef.current) return null;
@@ -87,20 +89,17 @@ export default function App() {
       const startedAt = performance.now();
       const now = Date.now() / 1000.0;
 
-      const payload = {
-        image_base64: base64Image,
-        timestamp: now,
-        is_static_image: isStaticImage,
-        prediction_horizon_sec: predictionHorizon,
-        prediction_method: predictionMethod,
-        confidence_threshold: confidenceThreshold,
-        manual_wind_direction: manualWindDirection || null,
-      };
-
       if (isStaticImage) setIsProcessing(true);
+      if (!browserModelReady) setBrowserModelLoading(true);
 
       try {
-        const result = await sendFrameForAnalysis(payload);
+        const result = await detectInBrowser(base64Image, {
+          confidenceThreshold,
+          isStaticImage,
+          timestamp: now,
+          predictionHorizonSec: predictionHorizon,
+        });
+        setBrowserModelReady(true);
         const completedAt = performance.now();
         const completedWallTime = Date.now();
         setAnalysisData(result);
@@ -175,15 +174,16 @@ export default function App() {
         }
         return result;
       } catch (err) {
-        setErrorMessage(err.message);
+        setErrorMessage(`Browser bottle detector failed: ${err.message}. Check your internet connection for the first-run model download, then retry in a recent Chrome or Edge browser.`);
         return null;
       } finally {
+        setBrowserModelLoading(false);
         frameRequestActiveRef.current = false;
         releaseFrameRequest?.();
         if (isStaticImage) setIsProcessing(false);
       }
     },
-    [predictionHorizon, predictionMethod, confidenceThreshold, manualWindDirection, pendingForecasts, isRecording, currentSession]
+    [predictionHorizon, predictionMethod, confidenceThreshold, pendingForecasts, isRecording, currentSession, browserModelReady]
   );
 
   const handleClearAnalysis = useCallback(() => {
@@ -194,6 +194,7 @@ export default function App() {
     setAnalysisTelemetry({ latencyMs: null, inferenceFps: null, lastProcessedAt: null });
     previousFrameCompletionRef.current = null;
     setErrorMessage(null);
+    resetBrowserTracker();
   }, []);
 
   // Model Reload Handler
@@ -238,6 +239,8 @@ export default function App() {
       <Navbar
         backendConnected={backendConnected}
         isCustomModel={modelStatus?.is_custom_trained}
+        isBrowserModelReady={browserModelReady}
+        isBrowserModelLoading={browserModelLoading}
       />
 
       <main className="main-wrapper">
@@ -261,6 +264,7 @@ export default function App() {
           analysisTelemetry={analysisTelemetry}
           modelStatus={modelStatus}
           backendConnected={backendConnected}
+          browserModelLoading={browserModelLoading}
         />
 
         {/* 4. Three Core Result Cards */}
