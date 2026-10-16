@@ -67,7 +67,7 @@ export default function App() {
       }
     }
     checkHealth();
-    const interval = setInterval(checkHealth, 8000);
+    const interval = setInterval(checkHealth, 30000);
     return () => {
       isMounted = false;
       clearInterval(interval);
