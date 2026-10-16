@@ -259,6 +259,8 @@ export default function App() {
           confidenceThreshold={confidenceThreshold}
           setConfidenceThreshold={setConfidenceThreshold}
           analysisTelemetry={analysisTelemetry}
+          modelStatus={modelStatus}
+          backendConnected={backendConnected}
         />
 
         {/* 4. Three Core Result Cards */}

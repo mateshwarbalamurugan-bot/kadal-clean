@@ -52,6 +52,8 @@ export default function LiveDemo({
   confidenceThreshold,
   setConfidenceThreshold,
   analysisTelemetry,
+  modelStatus,
+  backendConnected,
 }) {
   const videoRef = useRef(null);
   const imageRef = useRef(null);
@@ -65,6 +67,7 @@ export default function LiveDemo({
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [isCameraSwitching, setIsCameraSwitching] = useState(false);
   const inferenceInFlightRef = useRef(false);
+  const lastInferenceAtRef = useRef(0);
 
   // Stop Webcam helper
   const stopWebcam = useCallback(() => {
@@ -225,17 +228,23 @@ export default function LiveDemo({
         const video = videoRef.current;
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
+        const sourceWidth = video.videoWidth || 640;
+        const sourceHeight = video.videoHeight || 480;
+        const scale = Math.min(1, 640 / sourceWidth, 480 / sourceHeight);
+        canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+        canvas.height = Math.max(1, Math.round(sourceHeight * scale));
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        const base64Data = canvas.toDataURL('image/jpeg', 0.8);
+        const now = Date.now();
+        if (now - lastInferenceAtRef.current < 900) return;
         if (inferenceInFlightRef.current) return;
+        lastInferenceAtRef.current = now;
+        const base64Data = canvas.toDataURL('image/jpeg', 0.72);
         inferenceInFlightRef.current = true;
         Promise.resolve(onAnalyzeFrame(base64Data, false))
           .catch(() => {})
           .finally(() => { inferenceInFlightRef.current = false; });
-      }, 350); // ~3 FPS smooth stream analysis
+      }, 250); // Capture at most ~1.1 FPS; keep cloud CPU and memory load bounded.
     }
     return () => {
       if (intervalId) clearInterval(intervalId);
@@ -406,7 +415,7 @@ export default function LiveDemo({
       <div className="section-header">
         <h2 className="section-title">Live AI Demonstration</h2>
           <p className="section-subtitle">
-          Analyze live camera frames or a still image. Detection is class-limited; motion estimates require consecutive frames.
+          Hold the bottle fully in frame and move it steadily. Live tracking needs consecutive camera frames; a still image only confirms the object.
         </p>
       </div>
 
@@ -493,7 +502,7 @@ export default function LiveDemo({
             />
           </label>
           <div className="analysis-telemetry" aria-live="polite">
-            <span>Model: <strong>{analysisData?.model_status?.model_name || 'Waiting for backend'}</strong></span>
+            <span>Model: <strong>{analysisData?.model_status?.model_name || modelStatus?.model_name || (backendConnected ? 'Connected · waiting for first frame' : 'Waiting for backend')}</strong></span>
             <span>Inference: <strong>{analysisTelemetry?.latencyMs == null ? '—' : `${analysisTelemetry.latencyMs} ms`}</strong></span>
             <span>Rate: <strong>{analysisTelemetry?.inferenceFps == null ? '—' : `${analysisTelemetry.inferenceFps} FPS`}</strong></span>
             <span>Current candidates: <strong>{(analysisData?.detections || []).filter((item) => item.is_litter_candidate).length}</strong></span>
