@@ -1,11 +1,12 @@
 /**
  * Clean Kadal — Backend API Service
- * Configured via VITE_API_BASE_URL. Local development defaults to localhost;
- * production builds require a deployed HTTPS backend URL.
+ * Configured via VITE_API_BASE_URL. Production uses the verified Clean Kadal
+ * Render service unless a deployment explicitly overrides it.
  */
 
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
-const API_BASE = configuredApiBase.replace(/\/+$/, '');
+const DEFAULT_PRODUCTION_API = 'https://kadal-clean.onrender.com';
+const API_BASE = (configuredApiBase || (import.meta.env.DEV ? '' : DEFAULT_PRODUCTION_API)).replace(/\/+$/, '');
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
   const controller = new AbortController();
@@ -31,7 +32,7 @@ export async function checkBackendHealth() {
     const res = await fetchWithTimeout(apiUrl('/health'), {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
-    }, 8000);
+    }, 30000);
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     return await res.json();
   } catch (err) {
